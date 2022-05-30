@@ -1,0 +1,8 @@
+{
+    "cmake.sourceDirectory": "${workspaceFolder}/sample_app",
+    "cmake.configureEnvironment": {
+        "CC": "/opt/clang-riscv/bin/clang",
+        "CXX": "/opt/clang-riscv/bin/clang++"
+    },
+    "clangd.path": "/opt/clang-riscv/bin/clangd"
+}
