@@ -4,5 +4,6 @@
         "CC": "/opt/clang-riscv/bin/clang",
         "CXX": "/opt/clang-riscv/bin/clang++"
     },
-    "clangd.path": "/opt/clang-riscv/bin/clangd"
+    "clangd.path": "/opt/clang-riscv/bin/clangd",
+    "verilog.linting.verilator.arguments": "-Ifpga_core/src/main"
 }

@@ -1,5 +1,5 @@
 
-interface debugHw;
+interface IDebugHw;
     logic red, green, blue;
     logic [7:0] bits;
     logic btnA, btnB;
@@ -9,9 +9,9 @@ endinterface
 module main(input btnA, btnB,
             output red, green, blue, [7:0] bits);
 
-debugHw debugHw();
+IDebugHw debugHw();
 assign debugHw.btnA = btnA;
-assign debugHw.btnB = btnB;
+assign debugHw.btnB = btnB; 
 assign red = debugHw.red;
 assign green = debugHw.green;
 assign blue = debugHw.blue;
