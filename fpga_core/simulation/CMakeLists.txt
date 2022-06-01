@@ -5,7 +5,9 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 
 find_package(verilator HINTS /opt/verilator)
 
-add_executable(simulation sim_main.cpp)
+file(GLOB_RECURSE SOURCES "src/*.cpp")
 
-verilate(simulation SOURCES "${CMAKE_SOURCE_DIR}/../src/main.sv"
-         INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/../src/main")
+add_executable(simulation ${SOURCES})
+
+verilate(simulation SOURCES "${CMAKE_SOURCE_DIR}/../test/riscv_core_test.sv"
+         INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/../src")
