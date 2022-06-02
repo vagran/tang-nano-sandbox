@@ -12,6 +12,7 @@ module main(input btnA, btnB,
             output red, green, blue, [7:0] bits);
 
 parameter ADDRESS_SIZE = 15;
+parameter TRAP_SIZE = 3;
 
 IDebugHw debugHw();
 assign debugHw.btnA = btnA;
@@ -22,11 +23,16 @@ assign blue = debugHw.blue;
 assign bits = debugHw.bits;
 
 IMemoryBus #(.ADDRESS_SIZE(ADDRESS_SIZE)) memoryBus();
-ICpu cpuSignals();
+ICpu #(.TRAP_SIZE(TRAP_SIZE)) cpuSignals();
 
-RiscvCore #(.ADDRESS_SIZE(ADDRESS_SIZE)) riscvCore(
+RiscvCore riscvCore(
     .memoryBus(memoryBus.ext),
     .cpuSignals(cpuSignals.cpu));
+
+//XXX
+assign cpuSignals.clock = btnA;
+assign cpuSignals.reset = !btnB;
+assign bits[2:0] = cpuSignals.trap;
 
 //XXX
 //assign debugHw.bits[0] = debugHw.btnA;
