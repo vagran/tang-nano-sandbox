@@ -45,18 +45,22 @@ interface ICpuDebug;
 endinterface
 
 typedef enum reg[2:0] {
+    // Halt instruction encountered. Also halted after power off until reset if all registers are
+    // initialized to zero.
+    HALT,
     // Unsupported instruction code encountered.
     ILLEGAL_INSN,
     // Memory access to unaligned location requested.
     UNALIGNED_ACCESS,
-    // Halt instruction encountered.
-    HALT,
     // Internal inconsistency, most probably design bug
     INTERNAL_ERROR
 } TrapIndex;
 
 // RISC-V core minimal implementation.
 module RiscvCore
+    // Program counter value after reset (byte address)
+    #(parameter RESET_PC_ADDRESS = 0)
+
     (IMemoryBus memoryBus, ICpu cpuSignals
 
     `ifdef DEBUG
@@ -131,11 +135,12 @@ module RiscvCore
         if (cpuSignals.reset) begin
             // Do only minimal intialization to save some resources. Software should not assume
             // zeros in general purpose registers after reset (it is usualy true anyway).
-            pc <= 0;
+            pc <= RESET_PC_ADDRESS >> 1;
             hasHalfInsn <= 0;
             state <= S_INSN_FETCH;
             trap <= TRAP_NONE;
             memStrobe <= 0;
+            memWriteEnable <= 0;
 
         end else if (trap == TRAP_NONE) begin
             case (state)

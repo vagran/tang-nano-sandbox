@@ -1,6 +1,6 @@
-#include <Vriscv_core_test.h>
-#include <verilated.h>
 #include <verilated_vcd_c.h>
+
+#include <test_instance.h>
 
 #include <iostream>
 
@@ -10,9 +10,10 @@ main(int argc, char **argv, char **)
 {
     std::cout << "\n================= Simulation =================\n";
 
-    auto ctx = std::make_unique<VerilatedContext>();;
+    auto ctx = std::make_unique<VerilatedContext>();
     ctx->commandArgs(argc, argv);
-    auto top = std::make_unique<Vriscv_core_test>(ctx.get());
+
+    TestInstance test(*ctx, "basic");
 
     // Verilated::traceEverOn(true);
     // auto trace = std::make_unique<VerilatedVcdC>();
@@ -22,6 +23,9 @@ main(int argc, char **argv, char **)
         trace->open("wave.vcd");
     #endif
 
+    test.progMem[0] = 0x04;
+    test.progMem[1] = 0x08;
+    test.Reset();
     //XXX
     while (!ctx->gotFinish()) {
 
@@ -44,10 +48,8 @@ main(int argc, char **argv, char **)
         // assert((top->bits & 0b10) == 0);
 
         //XXX
-        break;
+        test.Tick();
     }
-
-    top->final();
 
     #ifdef TRACE
     trace->close();

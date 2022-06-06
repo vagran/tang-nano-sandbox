@@ -1,4 +1,5 @@
 `include "riscv_core.sv"
+`include "memory.sv"
 
 
 interface IDebugHw;
@@ -30,9 +31,16 @@ RiscvCore riscvCore(
     .cpuSignals(cpuSignals.cpu));
 
 //XXX
-assign cpuSignals.clock = btnA;
-assign cpuSignals.reset = !btnB;
-assign bits[2:0] = cpuSignals.trap;
+assign cpuSignals.clock = debugHw.btnA;
+assign cpuSignals.reset = !debugHw.btnB;
+assign {debugHw.red, debugHw.green, debugHw.blue} = ~cpuSignals.trap;
+assign cpuSignals.interruptReq = {debugHw.btnA, debugHw.btnB};
+assign debugHw.bits[3:0] = ~memoryBus.address[3:0];
+assign debugHw.bits[4] = ~memoryBus.writeEnable;
+assign debugHw.bits[5] = ~memoryBus.strobe;
+assign debugHw.bits[6] = ~memoryBus.ready;
+
+Memory memory(.memoryBus(memoryBus.mem));
 
 //XXX
 //assign debugHw.bits[0] = debugHw.btnA;
@@ -65,5 +73,15 @@ assign bits[2:0] = cpuSignals.trap;
 //    );
 
 //assign debugHw.bits = dout_o;
+
+// reg [7:0] cnt;
+// assign debugHw.bits = ~cnt;
+// always @(negedge debugHw.btnA) begin
+//     if (cnt == 0) begin
+//         cnt = 1;
+//     end else begin
+//         cnt <= cnt << 1;
+//     end
+// end
 
 endmodule

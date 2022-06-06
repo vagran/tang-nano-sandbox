@@ -7,6 +7,11 @@
             "label": "Simulate",
             "type": "shell",
             "command": "cmake -S ${workspaceFolder}/fpga_core/simulation -B ${workspaceFolder}/fpga_core/simulation/build && cmake --build ${workspaceFolder}/fpga_core/simulation/build -- -j 15 && ${workspaceFolder}/fpga_core/simulation/build/simulation"
-        }
+        },
+        {
+            "label": "Assemble",
+            "type": "shell",
+            "command": "bash ${workspaceFolder}/tools/assemble.sh ${workspaceFolder}/test-data/test.s"
+        },
     ]
 }
