@@ -13,5 +13,10 @@
             "type": "shell",
             "command": "bash ${workspaceFolder}/tools/assemble.sh ${workspaceFolder}/test-data/test.s"
         },
+        {
+            "label": "Generate decompressor",
+            "type": "shell",
+            "command": "python3 ${workspaceFolder}/tools/gen_decompressor.py"
+        }
     ]
 }

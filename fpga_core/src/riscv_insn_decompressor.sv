@@ -21,8 +21,8 @@ always @(compressed) begin
                 compressed[12:11],
                 compressed[5],
                 compressed[6],
-
                 2'b00,
+                
                 5'b00010, // x2
                 3'b000,
 
