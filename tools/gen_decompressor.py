@@ -19,6 +19,20 @@ class CommandDesc:
         self.components = components
         self.mapTo = mapTo
 
+        self.immIsSigned = None
+        self.immHiBit = None
+        curPos = self.GetSize() - 1
+        for c in components:
+            c.position = curPos
+            curPos -= c.GetSize()
+            if isinstance(c, ImmediateBits):
+                if self.immIsSigned is None:
+                    self.immIsSigned = c.isSigned
+                elif self.immIsSigned != c.isSigned:
+                    raise Exception(f"Mixing signed and unsigned immediate field in one command: {name}")
+                if self.immHiBit is None or self.immHiBit < c.hiBit:
+                    self.immHiBit = c.hiBit
+
     def VerifyBindings(self, bindings):
         if bindings is None:
             return
@@ -58,7 +72,7 @@ commands16 = {}
 # ##################################################################################################
 # Elements for declarative description of commands
 
-class b(OpcodeComponent):
+class ConstantBits(OpcodeComponent):
     """
     Some constant bits
     """
@@ -73,15 +87,39 @@ class b(OpcodeComponent):
             raise Exception("Too long field")
         self.value = int(bits, base=2)
 
+    @staticmethod
+    def FromInt(size, value):
+        max = (1 << size) - 1
+        if value > max or value < -(max + 1) / 2:
+            raise Exception(f"Value out of range: {value}")
+        if value < 0:
+            value = max + 1 + value
+        return ConstantBits(format(value, f"0{size}b"))
+
     def GetSize(self):
         return self.size
 
+    def Slice(self, hiBit, loBit):
+        """Get subset of this bits chunk.
+        :param hiBit: High-order bit of the slice.
+        :param loBit: Low-order bit of the slice.
+        :return: _description_
+        """
+        if hiBit > self.size - 1:
+            raise Exception(f"hiBit out of range: {hiBit}")
+        if loBit > hiBit:
+            raise Exception(f"loBit is greater than hiBit: {loBit}")
+        return ConstantBits(format(self.value, f"0{self.size}b") \
+            [self.size - 1 - hiBit : self.size - loBit])
 
-class imm(OpcodeComponent):
+
+b = ConstantBits
+
+class ImmediateBits(OpcodeComponent):
     """
     Some chunk of immediate value.
     """
-    def __init__(self, hiBit=None, loBit=None, isUnsigned=False):
+    def __init__(self, hiBit=None, loBit=None, isSigned=True):
         """
         :param hiBit: Index of high-ordered bit of the chunk. Can be None when used as bind target.
         :param loBit: Index of low-ordered bit of the chunk, None if one bit chunk.
@@ -91,19 +129,20 @@ class imm(OpcodeComponent):
             raise Exception("loBit is greater than hiBit")
         self.hiBit = hiBit
         self.loBit = loBit
-        self.isUnsigned = isUnsigned
+        self.isSigned = isSigned
 
     def GetSize(self):
         if self.hiBit is None:
             raise Exception("No size for bind target")
         return 1 if self.loBit is None else self.hiBit - self.loBit + 1
 
+imm = ImmediateBits
 
 def uimm(hiBit, loBit=None):
     """
     Chunk of unsigned immediate value.
     """
-    return imm(hiBit, loBit, True)
+    return imm(hiBit, loBit, False)
 
 
 class RegType(Enum):
@@ -134,6 +173,7 @@ def rd():
 def rsd():
     return RegReference(RegType.SRC_DST)
 
+# rs1' (prime) - compressed representation
 def rs1p():
     return RegReference(RegType.SRC1, True)
 
@@ -159,13 +199,13 @@ def cmd32(name, *components):
 def cmd16(name, mapTo, *components):
     if name in commands16:
         raise Exception(f"Command {name} already defined")
-    cmd = CommandDesc(name, components)
+    cmd = CommandDesc(name, components, mapTo)
     if cmd.GetSize() != 16:
         raise Exception(f"Command size is not 16 bits: {cmd.GetSize()} for {name}")
     commands16[name] = cmd
 
 
-class mapTo:
+class DecompressionMapping:
     def __init__(self, cmdName, bindings=None):
         """Mapping to 32 bits command.
         :param cmdName: 32 bits command name
@@ -176,6 +216,21 @@ class mapTo:
         self.targetCmd = commands32[cmdName]
         self.targetCmd.VerifyBindings(bindings)
         self.bindings = bindings
+
+    def FindBinding(self, component):
+        """
+        :param component: Immediate or register reference.
+        :return Binding value, None if not found.
+        """
+        if isinstance(component, ImmediateBits):
+            predicate = lambda ref: isinstance(ref, ImmediateBits)
+        elif isinstance(component, RegReference):
+            predicate = lambda ref: isinstance(ref, RegReference) and ref.regType == component.regType
+        else:
+            raise Exception("Unsupported reference type")
+        return next((b[1] for b in self.bindings if predicate(b[0])), None)
+
+mapTo = DecompressionMapping
 
 # ##################################################################################################
 # Commands declarative description based on RISC-V Instruction Set Manual
@@ -279,13 +334,67 @@ def DefineCommands16():
 
 # ##################################################################################################
 
+class BitsCopy:
+    def __init__(self, srcHi, srcLo, numReplicate=None) -> None:
+        """Bits chunk copying operation.
+        :param srcHi: Index of source high-ordered bit.
+        :param srcLo: Index of source low-ordered bit. May be None to indicate one bit size.
+        :numReplicate: Source bit (source must be one bit size) is replicated so many times if
+        specified (used for sign extension).
+        """
+        self.srcHi = srcHi
+        if srcLo is None:
+            self.srcLo = srcHi
+        else:
+            if srcLo > srcHi:
+                raise Exception("srcLo is greater than srcHi")
+            self.srcLo = srcLo
+        if numReplicate is not None:
+            if self.srcLo != self.srcHi:
+                raise Exception("Replication count can be specified for 1-bit source only")
+        self.numReplicate = numReplicate
+
+
 class CommandTransform:
     """Implements command transformation from compressed 16-bits representation to 32-bits
     representation.
     """
-    def __init__(self) -> None:
+    def __init__(self, cmd16Desc) -> None:
+        self.srcCmd = cmd16Desc
         self.components = []
+        targetCmd = cmd16Desc.mapTo.targetCmd
+        for c in targetCmd.components:
+            if isinstance(c, ConstantBits):
+                self.components.append(c)
 
+            elif isinstance(c, RegReference):
+                binding = cmd16Desc.mapTo.FindBinding(c)
+                if binding is not None:
+                    self.components.append(ConstantBits.FromInt(5, binding))
+                else:
+                    regRef = cmd16Desc.FindParam(c)
+                    if regRef is None:
+                        raise Exception("Cannot find register in source " +
+                                        f"command: {c.regType} in {cmd16Desc.name}")
+                    if regRef.isCompressed:
+                        # Register field in target is always 5 bits
+                        self.components.append(ConstantBits("01"))
+                        self.components.append(BitsCopy(regRef.position, regRef.position - 2))
+                    else:
+                        self.components.append(BitsCopy(regRef.position, regRef.position - 4))
+
+            elif isinstance(c, ImmediateBits):
+                binding = cmd16Desc.mapTo.FindBinding(c)
+                if binding is not None:
+                    bits = ConstantBits.FromInt(targetCmd.immHiBit + 1, binding)
+                    self.components.append(bits.Slice(c.hiBit, c.loBit))
+                else:
+                    
+                    #XXX
+                    pass
+
+            else:
+                raise Exception(f"Unhandled component type {c}")
 
 
 def Main():
