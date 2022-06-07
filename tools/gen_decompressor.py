@@ -291,7 +291,7 @@ class CommandTransform:
 def Main():
     global args
 
-    parser = argparse.ArgumentParser(description="Run photogrammetry using Pix4D engine")
+    parser = argparse.ArgumentParser(description="Generate opcodes decompressor and tests")
     parser.add_argument("--doSelfTest", action="store_true")
     parser.add_argument("--compiler", metavar="COMPILER_PATH", type=str,
                         help="Compiler path for self-testing")
