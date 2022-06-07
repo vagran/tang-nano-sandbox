@@ -1,0 +1,18 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Generate decompressor",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/tools/gen_decompressor.py",
+            "args": ["--doSelfTest", "--compiler", "/opt/clang-riscv/bin/clang",
+                     "--objdump", "/opt/clang-riscv/bin/llvm-objdump"],
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+    ]
+}

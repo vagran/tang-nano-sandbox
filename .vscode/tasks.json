@@ -16,7 +16,7 @@
         {
             "label": "Generate decompressor",
             "type": "shell",
-            "command": "python3 ${workspaceFolder}/tools/gen_decompressor.py"
+            "command": "python3 ${workspaceFolder}/tools/gen_decompressor.py --doSelfTest --compiler /opt/clang-riscv/bin/clang --objdump /opt/clang-riscv/bin/llvm-objdump"
         }
     ]
 }

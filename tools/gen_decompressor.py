@@ -1,7 +1,62 @@
+import argparse
 from enum import Enum, auto
 
+args = None
+
 class OpcodeComponent:
-    pass
+    """Bit-field in a command opcode.
+    """
+    def GetSize():
+        """
+        :return: Field size in bits
+        """
+        raise Exception("Method not implemented")
+
+
+class CommandDesc:
+    def __init__(self, name, components, mapTo=None) -> None:
+        self.name = name
+        self.components = components
+        self.mapTo = mapTo
+
+    def VerifyBindings(self, bindings):
+        if bindings is None:
+            return
+        for b in bindings:
+            if self.FindParam(b[0]) is None:
+                raise Exception(
+                    f"Cannot match binding of type {b[0].__class__.__name__} to command {self.name}")
+
+    def GetSize(self):
+        size = 0
+        for comp in self.components:
+            size += comp.GetSize()
+        return size
+
+    def FindParam(self, paramType):
+
+        if isinstance(paramType, imm):
+            predicate = lambda c: isinstance(c, imm)
+        elif isinstance(paramType, RegReference):
+
+            if paramType.regType == RegType.SRC1:
+                regList = [RegType.SRC1, RegType.SRC_DST]
+            elif paramType.regType == RegType.DST:
+                regList = [RegType.DST, RegType.SRC_DST]
+            else:
+                regList = [paramType.regType]
+            predicate = lambda c: isinstance(c, RegReference) and (c.regType in regList)
+        else:
+            raise Exception(f"Unsupported parameter type: {paramType}")
+
+        return next((c for c in self.components if predicate(c)), None)
+
+# Indexed by command name, element is CommandDesc
+commands32 = {}
+commands16 = {}
+
+# ##################################################################################################
+# Elements for declarative description of commands
 
 class b(OpcodeComponent):
     """
@@ -13,7 +68,14 @@ class b(OpcodeComponent):
         number of bits (do not skip leading zeros).
         """
         super().__init__()
-        #XXX
+        self.size = len(bits)
+        if self.size > 32:
+            raise Exception("Too long field")
+        self.value = int(bits, base=2)
+
+    def GetSize(self):
+        return self.size
+
 
 class imm(OpcodeComponent):
     """
@@ -25,13 +87,24 @@ class imm(OpcodeComponent):
         :param loBit: Index of low-ordered bit of the chunk, None if one bit chunk.
         """
         super().__init__()
-        #XXX
+        if loBit is not None and loBit > hiBit:
+            raise Exception("loBit is greater than hiBit")
+        self.hiBit = hiBit
+        self.loBit = loBit
+        self.isUnsigned = isUnsigned
+
+    def GetSize(self):
+        if self.hiBit is None:
+            raise Exception("No size for bind target")
+        return 1 if self.loBit is None else self.hiBit - self.loBit + 1
+
 
 def uimm(hiBit, loBit=None):
     """
     Chunk of unsigned immediate value.
     """
     return imm(hiBit, loBit, True)
+
 
 class RegType(Enum):
     SRC1 = auto()
@@ -42,6 +115,12 @@ class RegType(Enum):
 class RegReference(OpcodeComponent):
     def __init__(self, regType, isCompressed=False):
         super().__init__()
+        self.regType = regType
+        self.isCompressed = isCompressed
+
+    def GetSize(self):
+        return 3 if self.isCompressed else 5
+
 
 def rs1():
     return RegReference(RegType.SRC1)
@@ -67,11 +146,24 @@ def rdp():
 def rsdp():
     return RegReference(RegType.SRC_DST, True)
 
+
 def cmd32(name, *components):
-    print(components)
+    if name in commands32:
+        raise Exception(f"Command {name} already defined")
+    cmd = CommandDesc(name, components)
+    if cmd.GetSize() != 32:
+        raise Exception(f"Command size is not 32 bits: {cmd.GetSize()} for {name}")
+    commands32[name] = cmd
+
 
 def cmd16(name, mapTo, *components):
-    print(components)
+    if name in commands16:
+        raise Exception(f"Command {name} already defined")
+    cmd = CommandDesc(name, components)
+    if cmd.GetSize() != 16:
+        raise Exception(f"Command size is not 16 bits: {cmd.GetSize()} for {name}")
+    commands16[name] = cmd
+
 
 class mapTo:
     def __init__(self, cmdName, bindings=None):
@@ -79,8 +171,14 @@ class mapTo:
         :param cmdName: 32 bits command name
         :param bindings: list of tuples (field, value)
         """
-        pass
+        if cmdName not in commands32:
+            raise Exception(f"Target command {cmdName} not found")
+        self.targetCmd = commands32[cmdName]
+        self.targetCmd.VerifyBindings(bindings)
+        self.bindings = bindings
 
+# ##################################################################################################
+# Commands declarative description based on RISC-V Instruction Set Manual
 
 def DefineCommands32():
     cmd = cmd32
@@ -111,14 +209,21 @@ def DefineCommands32():
         imm(11,0), rs1(), b("111"), rd(), b("0010011"))
     cmd("ADD",
         b("0000000"), rs2(), rs1(), b("000"), rd(), b("0110011"))
+    cmd("SUB",
+        b("0100000"), rs2(), rs1(), b("000"), rd(), b("0110011"))
+    cmd("XOR",
+        b("0000000"), rs2(), rs1(), b("100"), rd(), b("0110011"))
+    cmd("OR",
+        b("0000000"), rs2(), rs1(), b("110"), rd(), b("0110011"))
+    cmd("AND",
+        b("0000000"), rs2(), rs1(), b("111"), rd(), b("0110011"))
 
 
 def DefineCommands16():
-
     cmd = cmd16
 
     cmd("C.ADDI4SPN", mapTo("ADDI", [(rs1(), 2)]),
-        b("000"), uimm(4,5), uimm(9,6), uimm(2), uimm(3), rdp(), b("00"))
+        b("000"), uimm(5,4), uimm(9,6), uimm(2), uimm(3), rdp(), b("00"))
     cmd("C.LW", mapTo("LW"),
         b("010"), uimm(5,3), rs1p(), uimm(2), uimm(6), rdp(), b("00"))
     cmd("C.SW", mapTo("SW"),
@@ -169,11 +274,33 @@ def DefineCommands16():
         b("100"), b("1"), rs1(), b("00000"), b("10"))
     cmd("C.ADD", mapTo("ADD"),
         b("100"), b("1"), rsd(), rs2(), b("10"))
-    cmd("C.SWSP", mapTo("SW", (rs1(), 2)),
+    cmd("C.SWSP", mapTo("SW", [(rs1(), 2)]),
         b("110"), uimm(5,2), uimm(7,6), rs2(), b("10"))
+
+# ##################################################################################################
+
+class CommandTransform:
+    """Implements command transformation from compressed 16-bits representation to 32-bits
+    representation.
+    """
+    def __init__(self) -> None:
+        self.components = []
+
 
 
 def Main():
+    global args
+
+    parser = argparse.ArgumentParser(description="Run photogrammetry using Pix4D engine")
+    parser.add_argument("--doSelfTest", action="store_true")
+    parser.add_argument("--compiler", metavar="COMPILER_PATH", type=str,
+                        help="Compiler path for self-testing")
+    parser.add_argument("--objdump", metavar="OBJDUMP_PATH", type=str,
+                        help="objdump path for self-testing")
+
+    args = parser.parse_args()
+
+    DefineCommands32()
     DefineCommands16()
 
 
