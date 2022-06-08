@@ -58,6 +58,15 @@ class Bindings:
         return next((b[1] for b in self.items if predicate(b[0])), None)
 
 
+def BitStringToBytes(s):
+    l = []
+    idx = 0
+    while idx < len(s):
+        l.append(int(s[idx:idx+8], base=2))
+        idx += 8
+    return bytes(l)
+
+
 class CommandDesc:
     def __init__(self, name, components, mapTo=None, isImmOffset=False) -> None:
         self.name = name
@@ -189,12 +198,7 @@ class CommandDesc:
                 raise Exception(f"Unrecognized field: {c}")
         if len(s) != 16 and len(s) != 32:
             raise Exception(f"Bad opcode length: {len(s)}")
-        l = []
-        idx = 0
-        while idx < len(s):
-            l.append(int(s[idx:idx+8], base=2))
-            idx += 8
-        return bytes(l)
+        return BitStringToBytes(s)
 
     def GenerateAsm(self, bindings):
         """
@@ -469,8 +473,7 @@ class DecompressionMapping:
         self.targetCmd = commands32[cmdName]
         self.bindings = Bindings()
         if bindings is not None:
-            for b in bindings:
-                self.bindings.Append(b)
+            self.bindings.Extend(bindings)
             self.targetCmd.VerifyBindings(self.bindings)
 
     def FindBinding(self, component):
@@ -610,6 +613,17 @@ class BitsCopy:
                 raise Exception("Replication count can be specified for 1-bit source only")
         self.numReplicate = numReplicate
 
+    def CopyFromBitString(self, s):
+        """
+        :param s: Source bit string.
+        :return: Slice with corresponding bits.
+        """
+        if len(s) != 16:
+            raise Exception("Expected 16 bits bit-string")
+        if self.numReplicate is not None:
+            return s[15 - self.srcHi] * self.numReplicate
+        return s[15-self.srcHi:16-self.srcLo]
+
 
 class CommandTransform:
     """Implements command transformation from compressed 16-bits representation to 32-bits
@@ -686,6 +700,14 @@ class CommandTransform:
                     isZeroBits = False
                     srcHiBit = srcImm.position - (srcImm.hiBit - immBit)
                 hiBit = immBit
+            elif not isZeroBits:
+                srcBit = srcImm.position - (srcImm.hiBit - immBit)
+                if srcBit != srcHiBit - (srcImm.hiBit - immBit):
+                    # Discontinuity in bits chunk, start new chunk
+                    CommitBits()
+                    isZeroBits = False
+                    srcHiBit = srcImm.position - (srcImm.hiBit - immBit)
+                    hiBit = immBit
             loBit = immBit
 
         if c.hiBit > self.srcCmd.immHiBit:
@@ -710,6 +732,24 @@ class CommandTransform:
 
         CommitBits()
 
+    def Apply(self, opcode16):
+        """
+        :param opcode16: 16-bits opcode (bytes) to apply transform on.
+        :return 32-bits decompressed opcode (bytes).
+        """
+        s = ""
+        opcode16String = ConstantBits.FromInt(16, opcode16[0] << 8 | opcode16[1]).GetBitString()
+        for c in self.components:
+            if isinstance(c, ConstantBits):
+                s += c.GetBitString()
+            elif isinstance(c, BitsCopy):
+                s += c.CopyFromBitString(opcode16String)
+            else:
+                raise Exception("Bad component type")
+        if len(s) != 32:
+            raise Exception(f"Unexpected result size: {len(s)}")
+        return BitStringToBytes(s)
+
 
 def Assemble(commandText, isCompressed):
     """
@@ -719,10 +759,7 @@ def Assemble(commandText, isCompressed):
     """
 
     code = f"""
-.global test
 .text
-
-test:
 {commandText}
     """
     objFile = "/tmp/decomp_test.o"
@@ -780,6 +817,11 @@ def DoSelfTest():
             if asmB != opc32:
                 raise Exception("Assembled full base opcode does not match the generated one: "  +
                                 f"{asmB.hex(' ')} vs {opc32.hex(' ')}")
+
+            t = CommandTransform(cmd)
+            decompressed = t.Apply(opc)
+            if decompressed != opc32:
+                raise Exception(f"Bad decompressed value: {decompressed.hex(' ')} != {opc32.hex(' ')}")
 
     print("Self-testing successfully completed")
 
