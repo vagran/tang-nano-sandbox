@@ -1,5 +1,8 @@
 import argparse
 from enum import Enum, auto
+import os
+import re
+import subprocess
 
 args = None
 
@@ -29,6 +32,12 @@ class Bindings:
     def Append(self, binding):
         self.items.append(binding)
 
+    def Extend(self, bindings):
+        if isinstance(bindings, Bindings):
+            self.items.extend(bindings.items)
+        else:
+            self.items.extend(bindings)
+
     def Match(self, ref):
         """
         :param ref: Immediate or register reference.
@@ -50,10 +59,11 @@ class Bindings:
 
 
 class CommandDesc:
-    def __init__(self, name, components, mapTo=None) -> None:
+    def __init__(self, name, components, mapTo=None, isImmOffset=False) -> None:
         self.name = name
         self.components = components
         self.mapTo = mapTo
+        self.isImmOffset = isImmOffset
 
         self.immIsSigned = None
         self.immHiBit = None
@@ -68,6 +78,15 @@ class CommandDesc:
                     raise Exception(f"Mixing signed and unsigned immediate field in one command: {name}")
                 if self.immHiBit is None or self.immHiBit < c.hiBit:
                     self.immHiBit = c.hiBit
+
+        # Figure out immediate alignment if any (count missing LSB)
+        self.immAlign = 0
+        if self.immIsSigned is not None:
+            for i in range(32):
+                if self.FindImmediate(i) is None:
+                    self.immAlign = i + 1
+                else:
+                    break
 
     def __str__(self) -> str:
         return self.name
@@ -125,7 +144,11 @@ class CommandDesc:
         def Generate(positiveImm):
             bindings = Bindings()
             if self.immIsSigned is not None:
-                bindings.Append((imm(), 10 if positiveImm else -10))
+                if self.immAlign == 0:
+                    v = 10
+                else:
+                    v = 3 << self.immAlign
+                bindings.Append((imm(), v if positiveImm else -v))
             # Use x10 and above
             curReg = 10
             for c in self.components:
@@ -172,6 +195,77 @@ class CommandDesc:
             l.append(int(s[idx:idx+8], base=2))
             idx += 8
         return bytes(l)
+
+    def GenerateAsm(self, bindings):
+        """
+        :param bindings: Bindings to use for arguments.
+        :return: Assembler text for the command.
+        """
+        asm = self.name
+        # Destination register if any
+        _rd = self.FindParam(rd())
+        if _rd is not None:
+            v = bindings.Match(_rd)
+            if v is None:
+                raise Exception("Failed to match destination register against bindings")
+            asm += f" x{v}"
+
+        _rs1 = self.FindParam(rs1())
+        _rs2 = self.FindParam(rs2())
+        _imm = self.FindParam(imm())
+
+        if (_rs1 is not None and (_rd is None or _rd.regType != RegType.SRC_DST) and
+            not self.isImmOffset):
+
+            v = bindings.Match(_rs1)
+            if v is None:
+                raise Exception("Failed to match source register 1 against bindings")
+            asm += " " if _rd is None else ", "
+            asm += f"x{v}"
+
+        # Workaround for assembler bug which requires x2 to be always specified for C.ADDI4SPN and
+        # C.ADDI16SP.
+        if self.name == "C.ADDI4SPN" or self.name == "C.ADDI16SP":
+            asm += " " if _rd is None else ", "
+            asm += "x2"
+            _rs1 = rs1()
+
+        if _rs2 is not None:
+            v = bindings.Match(_rs2)
+            if v is None:
+                raise Exception("Failed to match source register 2 against bindings")
+            asm += " " if _rd is None and self.isImmOffset else ", "
+            asm += f"x{v}"
+
+        if _imm is not None:
+            v = bindings.Match(imm())
+            if v is None:
+                raise Exception("Failed to match immediate value against bindings")
+
+            # C.LUI command expects scaled immediate and negative value as unsigned
+            if self.name == "C.LUI" or self.name == "LUI":
+                v = v >> 12
+                if v < 0:
+                    v = 0x100000 + v
+
+            if self.isImmOffset:
+                if self.name == "C.LWSP" or self.name == "C.SWSP":
+                    # x2 for C.LWSP
+                    vrs1 = 2
+                else:
+                    if _rs1 is None:
+                        raise Exception("Offset immediate without source register 1")
+                    vrs1 = bindings.Match(_rs1)
+                    if vrs1 is None:
+                        raise Exception("Failed to match source register 1 against bindings")
+                asm += " " if _rd is None and _rs2 is None else ", "
+                asm += f"{v}(x{vrs1})"
+            else:
+                asm += " " if _rd is None and _rs1 is None else ", "
+                asm += f"{v}"
+
+        return asm
+
 
 # Indexed by command name, element is CommandDesc
 commands32 = {}
@@ -346,19 +440,19 @@ def rsdp():
     return RegReference(RegType.SRC_DST, True)
 
 
-def cmd32(name, *components):
+def cmd32(name, *components, isImmOffset=False):
     if name in commands32:
         raise Exception(f"Command {name} already defined")
-    cmd = CommandDesc(name, components)
+    cmd = CommandDesc(name, components, isImmOffset=isImmOffset)
     if cmd.GetSize() != 32:
         raise Exception(f"Command size is not 32 bits: {cmd.GetSize()} for {name}")
     commands32[name] = cmd
 
 
-def cmd16(name, mapTo, *components):
+def cmd16(name, mapTo, *components, isImmOffset=False):
     if name in commands16:
         raise Exception(f"Command {name} already defined")
-    cmd = CommandDesc(name, components, mapTo)
+    cmd = CommandDesc(name, components, mapTo=mapTo, isImmOffset=isImmOffset)
     if cmd.GetSize() != 16:
         raise Exception(f"Command size is not 16 bits: {cmd.GetSize()} for {name}")
     commands16[name] = cmd
@@ -395,9 +489,11 @@ def DefineCommands32():
     cmd = cmd32
 
     cmd("LW",
-        imm(11,0), rs1(), b("010"), rd(), b("0000011"))
+        imm(11,0), rs1(), b("010"), rd(), b("0000011"),
+        isImmOffset=True)
     cmd("SW",
-        imm(11,5), rs2(), rs1(), b("010"), imm(4,0), b("0100011"))
+        imm(11,5), rs2(), rs1(), b("010"), imm(4,0), b("0100011"),
+        isImmOffset=True)
     cmd("JAL",
         imm(20), imm(10,1), imm(11), imm(19,12), rd(), b("1101111"))
     cmd("JALR",
@@ -436,9 +532,11 @@ def DefineCommands16():
     cmd("C.ADDI4SPN", mapTo("ADDI", [(rs1(), 2)]),
         b("000"), uimm(5,4), uimm(9,6), uimm(2), uimm(3), rdp(), b("00"))
     cmd("C.LW", mapTo("LW"),
-        b("010"), uimm(5,3), rs1p(), uimm(2), uimm(6), rdp(), b("00"))
+        b("010"), uimm(5,3), rs1p(), uimm(2), uimm(6), rdp(), b("00"),
+        isImmOffset=True)
     cmd("C.SW", mapTo("SW"),
-        b("110"), uimm(5,3), rs1p(), uimm(2), uimm(6), rdp(), b("00"))
+        b("110"), uimm(5,3), rs1p(), uimm(2), uimm(6), rs2p(), b("00"),
+        isImmOffset=True)
 
     # No special handling for C.NOP - translate it to `ADDI x0, x0, 0` to save resources
     cmd("C.ADDI", mapTo("ADDI"),
@@ -475,7 +573,8 @@ def DefineCommands16():
     cmd("C.SLLI", mapTo("SLLI"),
         b("000"), b("0"), rsd(), uimm(4,0), b("10"))
     cmd("C.LWSP", mapTo("LW", [(rs1(), 2)]),
-        b("010"), uimm(5), rd(), uimm(4,2), uimm(7,6), b("10"))
+        b("010"), uimm(5), rd(), uimm(4,2), uimm(7,6), b("10"),
+        isImmOffset=True)
     cmd("C.JR", mapTo("JALR", [(rd(), 0), (imm(), 0)]),
         b("100"), b("0"), rs1(), b("00000"), b("10"))
     cmd("C.MV", mapTo("ADD", [(rs1(), 0)]),
@@ -486,7 +585,8 @@ def DefineCommands16():
     cmd("C.ADD", mapTo("ADD"),
         b("100"), b("1"), rsd(), rs2(), b("10"))
     cmd("C.SWSP", mapTo("SW", [(rs1(), 2)]),
-        b("110"), uimm(5,2), uimm(7,6), rs2(), b("10"))
+        b("110"), uimm(5,2), uimm(7,6), rs2(), b("10"),
+        isImmOffset=True)
 
 # ##################################################################################################
 
@@ -611,15 +711,77 @@ class CommandTransform:
         CommitBits()
 
 
-def DoSelfTest():
-    #XXX
-    cmd = commands16["C.BEQZ"]
-    t = CommandTransform(cmd)
-    tcs = cmd.GenerateTestCases()
-    for tc in tcs:
-        opc = cmd.GenerateOpcode(tc)
-        print(f"[{cmd}] {tc}: {opc.hex(' ')}")
+def Assemble(commandText, isCompressed):
+    """
+    :param commandText: Command test in assembler language.
+    :param embeddedTarget: True to target RV32E, false for RV32I.
+    :return bytes for the command.
+    """
 
+    code = f"""
+.global test
+.text
+
+test:
+{commandText}
+    """
+    objFile = "/tmp/decomp_test.o"
+    subprocess.run([args.compiler, "-c", "--target=riscv32",
+                    "-march=rv32e" + ("c" if isCompressed else ""),
+                    "-mno-relax", "-mlittle-endian", "-x", "assembler", "-o", objFile, "-"],
+                   input=code.encode("UTF-8"), check=True)
+
+    p = subprocess.run([args.objdump, "--disassemble", objFile],
+                       check=True, capture_output=True)
+
+    output = p.stdout.decode("utf-8")
+    pat = re.compile(r"^\s*\d+:\s+((?:[a-f0-9]{2}\s)+).*$")
+    try:
+        for line in output.splitlines():
+            m = pat.fullmatch(line)
+            if m is None:
+                continue
+            print(line)
+            return bytes(reversed([int(h, base=16) for h in m.group(1).split()]))
+        raise Exception("Failed to find compiled opcodes")
+    finally:
+        os.remove(objFile)
+
+
+def DoSelfTest():
+    for cmdName in commands16.keys():
+        print(f"\n========================= {cmdName} =========================")
+        cmd = commands16[cmdName]
+        tcs = cmd.GenerateTestCases()
+        for tc in tcs:
+            print(f"[{cmd}] {tc}")
+            asm = cmd.GenerateAsm(tc)
+            print(asm)
+            asmB = Assemble(asm, True)
+            opc = cmd.GenerateOpcode(tc)
+            if asmB != opc:
+                raise Exception("Assembled opcode does not match the generated one: "  +
+                                f"{asmB.hex(' ')} vs {opc.hex(' ')}")
+
+            # Compile base instruction
+            baseCmd = cmd.mapTo.targetCmd
+            baseBindings = Bindings()
+            baseBindings.Extend(tc)
+            baseBindings.Extend(cmd.mapTo.bindings)
+            print(baseBindings)
+            asm = baseCmd.GenerateAsm(baseBindings)
+            print(asm)
+            asmB = Assemble(asm, True)
+            if asmB != opc:
+                raise Exception("Assembled base opcode does not match the generated one: "  +
+                                f"{asmB.hex(' ')} vs {opc.hex(' ')}")
+            opc32 = baseCmd.GenerateOpcode(baseBindings)
+            asmB = Assemble(asm, False)
+            if asmB != opc32:
+                raise Exception("Assembled full base opcode does not match the generated one: "  +
+                                f"{asmB.hex(' ')} vs {opc32.hex(' ')}")
+
+    print("Self-testing successfully completed")
 
 def Main():
     global args
