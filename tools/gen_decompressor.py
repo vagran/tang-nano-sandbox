@@ -65,6 +65,18 @@ class CommandDesc:
 
         return next((c for c in self.components if predicate(c)), None)
 
+    def FindImmediate(self, immBit):
+        """
+        :param immBit: Immediate bit index to find.
+        :return: Immediate chunk reference with the specified bit if found, None if not found.
+        """
+        for c in self.components:
+            if not isinstance(c, ImmediateBits):
+                continue
+            if immBit <= c.hiBit and immBit >= c.loBit:
+                return c
+        return None
+
 # Indexed by command name, element is CommandDesc
 commands32 = {}
 commands16 = {}
@@ -389,13 +401,70 @@ class CommandTransform:
                     bits = ConstantBits.FromInt(targetCmd.immHiBit + 1, binding)
                     self.components.append(bits.Slice(c.hiBit, c.loBit))
                 else:
-                    
-                    #XXX
-                    pass
+                    self._HandleImmediateChunk(c)
 
             else:
                 raise Exception(f"Unhandled component type {c}")
 
+    def _HandleImmediateChunk(self, c):
+        if self.srcCmd.immHiBit is None:
+            raise Exception("No immediate field in source command")
+
+        isZeroBits = None
+        hiBit = None
+        loBit = None
+        srcHiBit = None
+
+        def CommitBits():
+            nonlocal isZeroBits, hiBit, loBit, srcHiBit
+
+            if isZeroBits is None:
+                return
+            if isZeroBits:
+                self.components.append(ConstantBits.FromInt(hiBit - loBit + 1, 0))
+            else:
+                self.components.append(BitsCopy(srcHiBit, srcHiBit - (hiBit - loBit)))
+            isZeroBits = None
+            hiBit = None
+            loBit = None
+            srcHiBit = None
+
+        def CopyBit(immBit):
+            nonlocal isZeroBits, hiBit, loBit, srcHiBit
+
+            srcImm = self.srcCmd.FindImmediate(immBit)
+            if isZeroBits is not None and isZeroBits != srcImm is None:
+                CommitBits()
+            if isZeroBits is None:
+                if srcImm is None:
+                    isZeroBits = True
+                else:
+                    isZeroBits = False
+                    srcHiBit = srcImm.position - (srcImm.hiBit - immBit)
+                hiBit = immBit
+            loBit = immBit
+
+        if c.hiBit > self.srcCmd.immHiBit:
+            # Handle sign bits
+            loSignBit = max(c.loBit, self.srcCmd.immHiBit + 1)
+            if self.srcCmd.immIsSigned:
+                # Sign extension, find chunk with sign bit in source command
+                srcImm = self.srcCmd.FindImmediate(self.srcCmd.immHiBit)
+                if srcImm is None:
+                    raise Exception("Sign bit not found")
+                self.components.append(BitsCopy(srcImm.position, None, c.hiBit - loSignBit + 1))
+            else:
+                # Leading zeros
+                self.components.append(ConstantBits.FromInt(c.hiBit - loSignBit + 1, 0))
+            # Handle rest bits of chunk if any
+            for immBit in range(loSignBit - 1, c.lowBit - 1, -1):
+                CopyBit(immBit)
+        else:
+            # Just copy all bits (missing ones are set to zero)
+            for immBit in range(c.hiBit, c.lowBit - 1, -1):
+                CopyBit(immBit)
+
+        CommitBits()
 
 def Main():
     global args
