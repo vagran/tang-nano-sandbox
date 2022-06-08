@@ -13,6 +13,42 @@ class OpcodeComponent:
         raise Exception("Method not implemented")
 
 
+class Bindings:
+    def __init__(self) -> None:
+        # List of tuples (field reference, value)
+        self.items = []
+
+    def __str__(self) -> str:
+        s = ""
+        for b in self.items:
+            if len(s) > 0:
+                s += " "
+            s += f"{b[0]}: {b[1]}"
+        return s
+
+    def Append(self, binding):
+        self.items.append(binding)
+
+    def Match(self, ref):
+        """
+        :param ref: Immediate or register reference.
+        :return Binding value, None if not found.
+        """
+        if isinstance(ref, ImmediateBits):
+            predicate = lambda ref: isinstance(ref, ImmediateBits)
+        elif isinstance(ref, RegReference):
+            if ref.regType == RegType.SRC1:
+                regList = [RegType.SRC1, RegType.SRC_DST]
+            elif ref.regType == RegType.DST:
+                regList = [RegType.DST, RegType.SRC_DST]
+            else:
+                regList = [ref.regType]
+            predicate = lambda c: isinstance(c, RegReference) and (c.regType in regList)
+        else:
+            raise Exception("Unsupported reference type")
+        return next((b[1] for b in self.items if predicate(b[0])), None)
+
+
 class CommandDesc:
     def __init__(self, name, components, mapTo=None) -> None:
         self.name = name
@@ -33,10 +69,13 @@ class CommandDesc:
                 if self.immHiBit is None or self.immHiBit < c.hiBit:
                     self.immHiBit = c.hiBit
 
+    def __str__(self) -> str:
+        return self.name
+
     def VerifyBindings(self, bindings):
         if bindings is None:
             return
-        for b in bindings:
+        for b in bindings.items:
             if self.FindParam(b[0]) is None:
                 raise Exception(
                     f"Cannot match binding of type {b[0].__class__.__name__} to command {self.name}")
@@ -77,6 +116,63 @@ class CommandDesc:
                 return c
         return None
 
+    def GenerateTestCases(self):
+        """
+        :return List of lists of bindings for test cases for this command.
+        """
+        result = []
+
+        def Generate(positiveImm):
+            bindings = Bindings()
+            if self.immIsSigned is not None:
+                bindings.Append((imm(), 10 if positiveImm else -10))
+            # Use x10 and above
+            curReg = 10
+            for c in self.components:
+                if not isinstance(c, RegReference):
+                    continue
+                bindings.Append((c, curReg))
+                curReg += 1
+            return bindings
+
+        result.append(Generate(True))
+        if self.immIsSigned:
+            # Case with negative immediate value if has one signed
+            result.append(Generate(False))
+        return result
+
+    def GenerateOpcode(self, bindings):
+        """
+        :return: Opcode bytes.
+        """
+        # First generate bit string, MSB to LSB
+        s = ""
+        for c in self.components:
+            if isinstance(c, ConstantBits):
+                s += c.GetBitString()
+            elif isinstance(c, RegReference):
+                value = bindings.Match(c)
+                if value is None:
+                    raise Exception("Failed to match reg ref against provided bindings")
+                s += c.BindValue(value).GetBitString()
+            elif isinstance(c, ImmediateBits):
+                value = bindings.Match(c)
+                if value is None:
+                    raise Exception("Failed to match immediate against provided bindings")
+                if value < 0 and not c.isSigned:
+                    raise Exception("Negative value bound for unsigned immediate")
+                s += ConstantBits.FromInt(32, value).Slice(c.hiBit, c.loBit).GetBitString()
+            else:
+                raise Exception(f"Unrecognized field: {c}")
+        if len(s) != 16 and len(s) != 32:
+            raise Exception(f"Bad opcode length: {len(s)}")
+        l = []
+        idx = 0
+        while idx < len(s):
+            l.append(int(s[idx:idx+8], base=2))
+            idx += 8
+        return bytes(l)
+
 # Indexed by command name, element is CommandDesc
 commands32 = {}
 commands16 = {}
@@ -111,6 +207,12 @@ class ConstantBits(OpcodeComponent):
     def GetSize(self):
         return self.size
 
+    def GetBitString(self):
+        return format(self.value, f"0{self.size}b")
+
+    def __str__(self) -> str:
+        return self.GetBitString()
+
     def Slice(self, hiBit, loBit):
         """Get subset of this bits chunk.
         :param hiBit: High-order bit of the slice.
@@ -121,8 +223,7 @@ class ConstantBits(OpcodeComponent):
             raise Exception(f"hiBit out of range: {hiBit}")
         if loBit > hiBit:
             raise Exception(f"loBit is greater than hiBit: {loBit}")
-        return ConstantBits(format(self.value, f"0{self.size}b") \
-            [self.size - 1 - hiBit : self.size - loBit])
+        return ConstantBits(self.GetBitString()[self.size - 1 - hiBit : self.size - loBit])
 
 
 b = ConstantBits
@@ -140,13 +241,31 @@ class ImmediateBits(OpcodeComponent):
         if loBit is not None and loBit > hiBit:
             raise Exception("loBit is greater than hiBit")
         self.hiBit = hiBit
-        self.loBit = loBit
+        if loBit is None:
+            self.loBit = hiBit
+        else:
+            self.loBit = loBit
         self.isSigned = isSigned
 
     def GetSize(self):
         if self.hiBit is None:
             raise Exception("No size for bind target")
         return 1 if self.loBit is None else self.hiBit - self.loBit + 1
+
+    def __str__(self) -> str:
+        s = ""
+        if not self.isSigned:
+            s += "u"
+        s += "imm"
+        if self.hiBit is not None:
+            s += "["
+            s += str(self.hiBit)
+            if self.loBit != self.hiBit:
+                s += ":"
+                s += str(self.loBit)
+            s += "]"
+        return s
+
 
 imm = ImmediateBits
 
@@ -171,6 +290,34 @@ class RegReference(OpcodeComponent):
 
     def GetSize(self):
         return 3 if self.isCompressed else 5
+
+    def BindValue(self, value):
+        """
+        :param value: value Register index
+        :return ConstantBits for the field with the specified value.
+        """
+        if value < 0 or value > 15:
+            raise Exception(f"Illegal register index: {value}")
+        if self.isCompressed:
+            if value < 8:
+                raise Exception(f"Illegal register index for compressed field: {value}")
+            return ConstantBits.FromInt(3, value - 8)
+        else:
+            return ConstantBits.FromInt(5, value)
+
+    def __str__(self) -> str:
+        s = "r"
+        if self.regType == RegType.SRC1:
+            s += "s1"
+        elif self.regType == RegType.SRC2:
+            s += "s2"
+        elif self.regType == RegType.DST:
+            s += "d"
+        elif self.regType == RegType.SRC_DST:
+            s += "d/rs1"
+        if self.isCompressed:
+            s += "'"
+        return s
 
 
 def rs1():
@@ -226,21 +373,18 @@ class DecompressionMapping:
         if cmdName not in commands32:
             raise Exception(f"Target command {cmdName} not found")
         self.targetCmd = commands32[cmdName]
-        self.targetCmd.VerifyBindings(bindings)
-        self.bindings = bindings
+        self.bindings = Bindings()
+        if bindings is not None:
+            for b in bindings:
+                self.bindings.Append(b)
+            self.targetCmd.VerifyBindings(self.bindings)
 
     def FindBinding(self, component):
         """
         :param component: Immediate or register reference.
         :return Binding value, None if not found.
         """
-        if isinstance(component, ImmediateBits):
-            predicate = lambda ref: isinstance(ref, ImmediateBits)
-        elif isinstance(component, RegReference):
-            predicate = lambda ref: isinstance(ref, RegReference) and ref.regType == component.regType
-        else:
-            raise Exception("Unsupported reference type")
-        return next((b[1] for b in self.bindings if predicate(b[0])), None)
+        return self.bindings.Match(component)
 
 mapTo = DecompressionMapping
 
@@ -457,14 +601,25 @@ class CommandTransform:
                 # Leading zeros
                 self.components.append(ConstantBits.FromInt(c.hiBit - loSignBit + 1, 0))
             # Handle rest bits of chunk if any
-            for immBit in range(loSignBit - 1, c.lowBit - 1, -1):
+            for immBit in range(loSignBit - 1, c.loBit - 1, -1):
                 CopyBit(immBit)
         else:
             # Just copy all bits (missing ones are set to zero)
-            for immBit in range(c.hiBit, c.lowBit - 1, -1):
+            for immBit in range(c.hiBit, c.loBit - 1, -1):
                 CopyBit(immBit)
 
         CommitBits()
+
+
+def DoSelfTest():
+    #XXX
+    cmd = commands16["C.BEQZ"]
+    t = CommandTransform(cmd)
+    tcs = cmd.GenerateTestCases()
+    for tc in tcs:
+        opc = cmd.GenerateOpcode(tc)
+        print(f"[{cmd}] {tc}: {opc.hex(' ')}")
+
 
 def Main():
     global args
@@ -480,6 +635,8 @@ def Main():
 
     DefineCommands32()
     DefineCommands16()
+    if args.doSelfTest:
+        DoSelfTest()
 
 
 if __name__ == "__main__":
