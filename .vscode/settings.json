@@ -5,5 +5,9 @@
         "CXX": "/opt/clang-riscv/bin/clang++"
     },
     "clangd.path": "/opt/clang-riscv/bin/clangd",
-    "verilog.linting.verilator.arguments": "-Ifpga_core/src --top main"
+    "verilog.linting.verilator.arguments": "-Ifpga_core/src --top main",
+    "cSpell.words": [
+        "Decompressor",
+        "Verilog"
+    ]
 }

@@ -1,4 +1,5 @@
 import argparse
+from curses import nonl
 from enum import Enum, auto
 import os
 import re
@@ -55,7 +56,10 @@ class Bindings:
             predicate = lambda c: isinstance(c, RegReference) and (c.regType in regList)
         else:
             raise Exception("Unsupported reference type")
-        return next((b[1] for b in self.items if predicate(b[0])), None)
+        value = next((b[1] for b in self.items if predicate(b[0])), None)
+        if isinstance(ref, RegReference) and ref.isNotEqual is not None and value == ref.isNotEqual:
+            raise Exception("Constrained register matched to disallowed binding")
+        return value
 
 
 def BitStringToBytes(s):
@@ -104,9 +108,13 @@ class CommandDesc:
         if bindings is None:
             return
         for b in bindings.items:
-            if self.FindParam(b[0]) is None:
+            param = self.FindParam(b[0])
+            if param is None:
                 raise Exception(
                     f"Cannot match binding of type {b[0].__class__.__name__} to command {self.name}")
+            if isinstance(param, RegReference) and param.isNotEqual is not None and \
+                b[1] == param.isNotEqual:
+                raise Exception("Constrained register bound to disallowed value")
 
     def GetSize(self):
         size = 0
@@ -143,6 +151,27 @@ class CommandDesc:
             if immBit <= c.hiBit and immBit >= c.loBit:
                 return c
         return None
+
+    def GetField(self, bitIdx):
+        """_summary_
+        :return: Field containing the specified bit.
+        """
+        for c in self.components:
+            if bitIdx > c.position:
+                raise Exception("Bit index out of range")
+            if bitIdx <= c.position and bitIdx >= c.position - c.GetSize() + 1:
+                return c
+        raise Exception("Failed to find field")
+
+    def GetConstrainedRegisterFields(self):
+        """
+        :return: List of register reference fields with not-equal value.
+        """
+        l = []
+        for c in self.components:
+            if isinstance(c, RegReference) and c.isNotEqual is not None:
+                l.append(c)
+        return l
 
     def GenerateTestCases(self):
         """
@@ -270,6 +299,21 @@ class CommandDesc:
 
         return asm
 
+    def GetConstantBit(self, bitIdx):
+        """
+        :param bitIdx: Bit index to test.
+        :return: Value of constant bit (1 or 0), or None if the bit is not constant.
+        """
+        for c in self.components:
+            csz = c.GetSize()
+            if bitIdx > c.position:
+                raise Exception("Bit index out of range")
+            if bitIdx < c.position - csz + 1:
+                continue
+            if isinstance(c, ConstantBits):
+                return 1 if (c.value & (1 << (c.size - 1 - c.position + bitIdx))) != 0 else 0
+            return None
+        raise Exception("Unexpected end of list")
 
 # Indexed by command name, element is CommandDesc
 commands32 = {}
@@ -381,10 +425,11 @@ class RegType(Enum):
     SRC_DST = auto()
 
 class RegReference(OpcodeComponent):
-    def __init__(self, regType, isCompressed=False):
+    def __init__(self, regType, isCompressed=False, isNotEqual=None):
         super().__init__()
         self.regType = regType
         self.isCompressed = isCompressed
+        self.isNotEqual = isNotEqual
 
     def GetSize(self):
         return 3 if self.isCompressed else 5
@@ -421,11 +466,11 @@ class RegReference(OpcodeComponent):
 def rs1():
     return RegReference(RegType.SRC1)
 
-def rs2():
-    return RegReference(RegType.SRC2)
+def rs2(isNotEqual=None):
+    return RegReference(RegType.SRC2, isNotEqual=isNotEqual)
 
-def rd():
-    return RegReference(RegType.DST)
+def rd(isNotEqual=None):
+    return RegReference(RegType.DST, isNotEqual=isNotEqual)
 
 def rsd():
     return RegReference(RegType.SRC_DST)
@@ -551,7 +596,7 @@ def DefineCommands16():
     cmd("C.ADDI16SP", mapTo("ADDI", [(rs1(), 2), (rd(), 2)]),
         b("011"), imm(9), b("00010"), imm(4), imm(6), imm(8,7), imm(5), b("01"))
     cmd("C.LUI", mapTo("LUI"),
-        b("011"), imm(17), rd(), imm(16,12), b("01"))
+        b("011"), imm(17), rd(2), imm(16,12), b("01"))
     cmd("C.SRLI", mapTo("SRLI"),
         b("100"), b("0"), b("00"), rsdp(), uimm(4,0), b("01"))
     cmd("C.SRAI", mapTo("SRAI"),
@@ -581,12 +626,12 @@ def DefineCommands16():
     cmd("C.JR", mapTo("JALR", [(rd(), 0), (imm(), 0)]),
         b("100"), b("0"), rs1(), b("00000"), b("10"))
     cmd("C.MV", mapTo("ADD", [(rs1(), 0)]),
-        b("100"), b("0"), rd(), rs2(), b("10"))
+        b("100"), b("0"), rd(), rs2(0), b("10"))
     # C.EBREAK is skipped intentionally to save resources
     cmd("C.JALR", mapTo("JALR", [(rd(), 1), (imm(), 0)]),
         b("100"), b("1"), rs1(), b("00000"), b("10"))
     cmd("C.ADD", mapTo("ADD"),
-        b("100"), b("1"), rsd(), rs2(), b("10"))
+        b("100"), b("1"), rsd(), rs2(0), b("10"))
     cmd("C.SWSP", mapTo("SW", [(rs1(), 2)]),
         b("110"), uimm(5,2), uimm(7,6), rs2(), b("10"),
         isImmOffset=True)
@@ -664,6 +709,9 @@ class CommandTransform:
             else:
                 raise Exception(f"Unhandled component type {c}")
 
+        self._FoldReplications()
+        self._FoldConstantBits()
+
     def _HandleImmediateChunk(self, c):
         if self.srcCmd.immHiBit is None:
             raise Exception("No immediate field in source command")
@@ -732,6 +780,66 @@ class CommandTransform:
 
         CommitBits()
 
+    def _FoldReplications(self):
+        # Fold several adjacent bits replications into one component
+        out = []
+        s = None
+
+        def Commit():
+            nonlocal s
+            if s is None:
+                return
+            out.append(ConstantBits(s))
+            s = None
+
+        def Add(c):
+            nonlocal s
+            if s is None:
+                s = c.GetBitString()
+            else:
+                s += c.GetBitString()
+
+        for c in self.components:
+            if isinstance(c, ConstantBits):
+                Add(c)
+            else:
+                Commit()
+                out.append(c)
+
+        Commit()
+        self.components = out
+
+    def _FoldConstantBits(self):
+        # Fold several adjacent constant bits into one component
+        out = []
+        srcBit = None
+        count = 0
+
+        def Commit():
+            nonlocal srcBit, count
+            if srcBit is None:
+                return
+            out.append(BitsCopy(srcBit, None, count if count > 1 else None))
+            srcBit = None
+            count = 0
+
+        def Add(c):
+            nonlocal srcBit, count
+            if srcBit is not None and c.srcHi != srcBit:
+                Commit()
+            srcBit = c.srcHi
+            count += c.numReplicate if c.numReplicate is not None else 1
+
+        for c in self.components:
+            if isinstance(c, BitsCopy) and c.srcLo == c.srcHi:
+                Add(c)
+            else:
+                Commit()
+                out.append(c)
+
+        Commit()
+        self.components = out
+
     def Apply(self, opcode16):
         """
         :param opcode16: 16-bits opcode (bytes) to apply transform on.
@@ -749,6 +857,34 @@ class CommandTransform:
         if len(s) != 32:
             raise Exception(f"Unexpected result size: {len(s)}")
         return BitStringToBytes(s)
+
+    def GenerateVerilogExpression(self, inputVarName):
+        """
+        :param inputVarName: 16 bits opcode variable name.
+        :return: Expression for decompressed 32 bits opcode.
+        """
+        s = "{"
+        isFirst = True
+        for c in self.components:
+            if not isFirst:
+                s += ", "
+            else:
+                isFirst = False
+            if isinstance(c, ConstantBits):
+                s += f"{c.size}'b{c.GetBitString()}"
+            elif isinstance(c, BitsCopy):
+                if c.numReplicate is None:
+                    if c.srcLo == c.srcHi:
+                        s += f"{inputVarName}[{c.srcHi}]"
+                    else:
+                        s += f"{inputVarName}[{c.srcHi}:{c.srcLo}]"
+                else:
+                    s += f"{{{c.numReplicate}{{{inputVarName}[{c.srcHi}]}}}}"
+
+            else:
+                raise Exception("Unexpected component type")
+        s += "}"
+        return s
 
 
 def Assemble(commandText, isCompressed):
@@ -825,6 +961,190 @@ def DoSelfTest():
 
     print("Self-testing successfully completed")
 
+
+class SelectionTree:
+    """Contains logic for identifying input 16-bits command.
+    """
+    class Node:
+        def __init__(self, hiBit, loBit=None, notEqualValue=None) -> None:
+            # True case for if, either Node or CommandDesc
+            self.first = None
+            # else case for if
+            self.second = None
+            self.hiBit = hiBit
+            self.loBit = loBit if loBit is not None else hiBit
+            self.notEqualValue = notEqualValue
+
+        def HasBetterBalance(self, node):
+            """
+            :return: True if this temporal node has better balance than the specified one.
+            """
+            return abs(len(self.first) - len(self.second)) < abs(len(node.first) - len(node.second))
+
+        def GetConditionExpr(self, varName):
+            """
+            :param varName: Variable name which stores 16-bits opcode.
+            :return: String with expression for `if` statement.
+            """
+            if self.loBit == self.hiBit:
+                return f"{varName}[{self.hiBit}]"
+            return f"{varName}[{self.hiBit}:{self.loBit}] != {self.notEqualValue}"
+
+    def __init__(self, rootNode) -> None:
+        self.rootNode = rootNode
+
+    @staticmethod
+    def Generate(commands):
+        return SelectionTree(SelectionTree.GenerateNode(commands))
+
+    @staticmethod
+    def GenerateNode(commands):
+        if len(commands) == 1:
+            return commands[0]
+        # List of possible nodes, one be selected with the best balance
+        candidate = None
+        for i in range(16):
+            node = SelectionTree.TryGenerateNode(commands, i)
+            if node is not None:
+                if candidate is None or node.HasBetterBalance(candidate):
+                    candidate = node
+                if abs(len(candidate.first) - len(candidate.second)) < 2:
+                    # Already optimal balance
+                    break
+
+        checkedPositions = set()
+        # Check for constrained register fields
+        for cmd in commands:
+            fields = cmd.GetConstrainedRegisterFields()
+            for field in fields:
+                if field.position in checkedPositions:
+                    continue
+                checkedPositions.add(field.position)
+                node = SelectionTree.TryGenerateNode(commands, field.position,
+                                                     field.position - field.GetSize() + 1)
+                if node is not None:
+                    if candidate is None or node.HasBetterBalance(candidate):
+                        candidate = node
+                    if abs(len(candidate.first) - len(candidate.second)) < 2:
+                        # Already optimal balance
+                        break
+            else:
+                continue
+            break
+
+        if candidate is None:
+            raise Exception("Failed to generate selector for nodes: " + ", ".join(map(str, commands)))
+        candidate.first = SelectionTree.GenerateNode(candidate.first)
+        candidate.second = SelectionTree.GenerateNode(candidate.second)
+        return candidate
+
+    @staticmethod
+    def TryGenerateNode(commands, hiBit, loBit=None):
+        """
+        :param hiBit: MSB to test.
+        :param loBit: LSB to test, None if one bit.
+        :return: Temporal node (children are lists of commands), or None if cannot be created on the
+        specified bits.
+        """
+        nzCommands = []
+        zCommands = []
+        notEqualValue = None
+
+        if loBit is None:
+            # Single bit test
+            for cmd in commands:
+                bit = cmd.GetConstantBit(hiBit)
+                if bit is None:
+                    return None
+                if bit == 0:
+                    zCommands.append(cmd)
+                else:
+                    nzCommands.append(cmd)
+        else:
+            # Bit-field test against not-equal value.
+            # Bit index to value
+            value = {}
+            for cmd in commands:
+                isConstant = None
+                for bitIdx in range(loBit, hiBit + 1):
+                    bit = cmd.GetConstantBit(bitIdx)
+                    if bit is None:
+                        if isConstant is None:
+                            isConstant = False
+                        elif isConstant:
+                            return None
+                    else:
+                        if isConstant is None:
+                            isConstant = True
+                        elif not isConstant:
+                            return None
+                        if bitIdx in value:
+                            if value[bitIdx] != bit:
+                                return None
+                        else:
+                            value[bitIdx] = bit
+                if isConstant:
+                    zCommands.append(cmd)
+                else:
+                    nzCommands.append(cmd)
+            notEqualValue = 0
+            for bitIdx in range(loBit, hiBit + 1):
+                if value[bitIdx]:
+                    notEqualValue = notEqualValue | (1 << (bitIdx - loBit))
+            # Check if all nzCommands have constrained field in target bits
+            for cmd in nzCommands:
+                field = cmd.GetField(hiBit)
+                if not isinstance(field, RegReference):
+                    return None
+                if field.position != hiBit or field.position - field.GetSize() + 1 != loBit:
+                    return None
+                if field.isNotEqual != notEqualValue:
+                    return None
+
+        if len(zCommands) == 0 or len(nzCommands) == 0:
+            return None
+
+        node = SelectionTree.Node(hiBit, loBit, notEqualValue)
+        node.first = nzCommands
+        node.second = zCommands
+        return node
+
+    def GenerateVerilog(self, insn16VarName, insn32VarName):
+        """
+        :param insn16VarName: Name for input variable which stores 16-bits opcode.
+        :param insn32VarName: Name for output variable which stores 32-bits opcode.
+        :return: String with Verilog code for decompressing 16-bits instruction.
+        """
+        return self._GenerateNodeVerilog(self.rootNode, insn16VarName, insn32VarName, 0)
+
+    def _GenerateNodeVerilog(self, node, insn16VarName, insn32VarName, indent):
+        INDENT = "    "
+        _indent = INDENT * indent
+        s = ""
+        s += f"{_indent}if ({node.GetConditionExpr(insn16VarName)}) begin\n"
+        if isinstance(node.first, CommandDesc):
+            s += f"{_indent + INDENT}// {node.first} -> {node.first.mapTo.targetCmd}\n"
+            t = CommandTransform(node.first)
+            s += f"{_indent + INDENT}{insn32VarName} = {t.GenerateVerilogExpression(insn16VarName)};\n"
+        else:
+            s += self._GenerateNodeVerilog(node.first, insn16VarName, insn32VarName, indent + 1)
+        s += f"{_indent}end else begin\n"
+        if isinstance(node.second, CommandDesc):
+            s += f"{_indent + INDENT}// {node.second} -> {node.second.mapTo.targetCmd}\n"
+            t = CommandTransform(node.second)
+            s += f"{_indent + INDENT}{insn32VarName} = {t.GenerateVerilogExpression(insn16VarName)};\n"
+        else:
+            s += self._GenerateNodeVerilog(node.second, insn16VarName, insn32VarName, indent + 1)
+        s += f"{_indent}end\n"
+        return s
+
+
+def GenerateVerilogDecompressor(outputPath):
+    selTree = SelectionTree.Generate(commands16.values())
+    with open(outputPath, "w") as f:
+        f.write("// Do not edit! This file is generated by gen_decompressor.py\n")
+        f.write(selTree.GenerateVerilog("insn16", "insn32"))
+
 def Main():
     global args
 
@@ -834,6 +1154,8 @@ def Main():
                         help="Compiler path for self-testing")
     parser.add_argument("--objdump", metavar="OBJDUMP_PATH", type=str,
                         help="objdump path for self-testing")
+    parser.add_argument("--decompOut", metavar="DECOMP_CODE_PATH", type=str,
+                        help="Path to Verilog file with generated decompressor code")
 
     args = parser.parse_args()
 
@@ -841,6 +1163,9 @@ def Main():
     DefineCommands16()
     if args.doSelfTest:
         DoSelfTest()
+
+    if args.decompOut:
+        GenerateVerilogDecompressor(args.decompOut)
 
 
 if __name__ == "__main__":

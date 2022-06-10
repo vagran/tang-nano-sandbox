@@ -10,7 +10,9 @@
             "request": "launch",
             "program": "${workspaceFolder}/tools/gen_decompressor.py",
             "args": ["--doSelfTest", "--compiler", "/opt/clang-riscv/bin/clang",
-                     "--objdump", "/opt/clang-riscv/bin/llvm-objdump"],
+                     "--objdump", "/opt/clang-riscv/bin/llvm-objdump",
+                     "--decompOut",
+                     "${workspaceFolder}/fpga_core/src/generated/riscv_insn_decompressor_impl.sv"],
             "console": "integratedTerminal",
             "justMyCode": false
         },
