@@ -9,5 +9,8 @@
     "cSpell.words": [
         "Decompressor",
         "Verilog"
-    ]
+    ],
+    "files.associations": {
+        "*.inc": "cpp"
+    },
 }

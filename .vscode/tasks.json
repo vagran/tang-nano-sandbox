@@ -16,7 +16,7 @@
         {
             "label": "Generate decompressor",
             "type": "shell",
-            "command": "python3 ${workspaceFolder}/tools/gen_decompressor.py --doSelfTest --compiler /opt/clang-riscv/bin/clang --objdump /opt/clang-riscv/bin/llvm-objdump --decompOut ${workspaceFolder}/fpga_core/src/generated/riscv_insn_decompressor_impl.sv"
+            "command": "python3 ${workspaceFolder}/tools/gen_decompressor.py --doSelfTest --compiler /opt/clang-riscv/bin/clang --objdump /opt/clang-riscv/bin/llvm-objdump --decompOut ${workspaceFolder}/fpga_core/src/generated/riscv_insn_decompressor_impl.sv --testCppOut ${workspaceFolder}/fpga_core/simulation/impl/generated/decompressor_test_data.inc"
         }
     ]
 }
