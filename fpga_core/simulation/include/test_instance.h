@@ -34,13 +34,13 @@ public:
 
 class TestInstance {
 public:
-    VerilatedContext &ctx;
+    VerilatedContext ctx;
     const std::string name;
     std::unique_ptr<Vriscv_core_test> module;
     std::vector<uint8_t> progMem, dataMem;
 
-    TestInstance(VerilatedContext &ctx, const std::string &name):
-        ctx(ctx),
+    TestInstance(const std::string &name):
+        ctx(),
         name(name),
         module(std::make_unique<Vriscv_core_test>(&ctx)),
         progMem(PROG_SIZE),

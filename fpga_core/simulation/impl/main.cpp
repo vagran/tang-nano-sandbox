@@ -1,6 +1,6 @@
 #include <verilated_vcd_c.h>
 
-#include <test_instance.h>
+#include <test_runner.h>
 
 #include <iostream>
 
@@ -10,10 +10,8 @@ main(int argc, char **argv, char **)
 {
     std::cout << "\n================= Simulation =================\n";
 
-    auto ctx = std::make_unique<VerilatedContext>();
-    ctx->commandArgs(argc, argv);
-
-    TestInstance test(*ctx, "basic");
+    TestInstance test("basic");
+    test.ctx.commandArgs(argc, argv);
 
     // Verilated::traceEverOn(true);
     // auto trace = std::make_unique<VerilatedVcdC>();
@@ -23,11 +21,11 @@ main(int argc, char **argv, char **)
         trace->open("wave.vcd");
     #endif
 
-    test.progMem[0] = 0x04;
-    test.progMem[1] = 0x08;
-    test.Reset();
-    //XXX
-    while (!ctx->gotFinish()) {
+    // test.progMem[0] = 0x04;
+    // test.progMem[1] = 0x08;
+    // test.Reset();
+    // //XXX
+    // while (!test.ctx.gotFinish()) {
 
         // top->btnA = 1;
         // top->btnB = 1;
@@ -48,12 +46,14 @@ main(int argc, char **argv, char **)
         // assert((top->bits & 0b10) == 0);
 
         //XXX
-        test.Tick();
-    }
+        // test.Tick();
+    // }
 
     #ifdef TRACE
     trace->close();
     #endif
+
+    RunTests(argc, argv);
 
     std::cout << "All tests passed\n";
     return 0;
