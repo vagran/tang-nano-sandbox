@@ -41,7 +41,8 @@ endinterface
 interface ICpuDebug;
     // Fetched and decompressed (if necessary) instruction code.
     wire [31:0] insnCode;
-
+    // Pipeline state
+    wire [1:0] state;
 endinterface
 
 typedef enum reg[2:0] {
@@ -104,7 +105,7 @@ module RiscvCore
     wire isInsnBuf48 = hasHalfInsn & !pc[0];
 
     wire [31:0] decompressedInsn;
-    RiscvInsnDecompressor insnDcmp(.compressed(insnBuf[15:0]), .decompressed(decompressedInsn));
+    RiscvInsnDecompressor insnDcmp(.insn16(insnBuf[15:0]), .insn32(decompressedInsn));
     // Full 32 bits instruction view. Either decompressed or initial full size instruction.
     wire [31:0] insn32 = isInsn32 ? insnBuf[31:0] : decompressedInsn;
     `ifdef DEBUG
@@ -118,6 +119,10 @@ module RiscvCore
 
     // Current state.
     State state;
+
+    `ifdef DEBUG
+        assign debug.state = state;
+    `endif
 
     // Memory interface buffers
     reg [memoryBus.ADDRESS_SIZE-1:0] memAddr;

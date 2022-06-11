@@ -13,7 +13,8 @@ module RiscvCoreTest(
     output memStrobe,
     output memWriteEnable,
     inout reg [31:0] memData,
-    output [31:0] dbgInsnCode);
+    output [31:0] dbgInsnCode,
+    output [1:0] dbgState);
 
     parameter ADDRESS_SIZE = 15;
     parameter TRAP_SIZE = 3;
@@ -36,6 +37,7 @@ module RiscvCoreTest(
 
     ICpuDebug dbg();
     assign dbgInsnCode = dbg.insnCode;
+    assign dbgState = dbg.state;
 
     RiscvCore #(.RESET_PC_ADDRESS(16'h2000)) riscvCore
     (
