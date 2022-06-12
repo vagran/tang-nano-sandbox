@@ -1,21 +1,20 @@
-`include "riscv_insn_decompressor.sv"
-
 interface IMemoryBus
     // Number of address lines for addressing 32-bits words.
-    #(parameter ADDRESS_SIZE);
+    #(parameter ADDRESS_SIZE = 15);
 
     wire [ADDRESS_SIZE-1:0] address;
-    wire [31:0] data;
+    wire [31:0] dataWrite;
+    wire [31:0] dataRead;
     // Write if 1 (data should be set as well), read if 0
     wire writeEnable;
-    // `Address`, `data` (if writing) and `writeEnable` are set, start memory access.
+    // `Address`, `dataWrite` (if writing) and `writeEnable` are set, start memory access.
     wire strobe;
-    // Signalled by memory block that operation is complete. `Data` can be read (if reading),
+    // Signalled by memory block that operation is complete. `dataRead` can be read (if reading),
     // `enable` can be de-asserted after that.
     wire ready;
 
-    modport mem(input address, writeEnable, strobe, inout data, output ready);
-    modport ext(output address, writeEnable, strobe, inout data, input ready);
+    modport mem(input address, writeEnable, strobe, dataWrite, output dataRead, ready);
+    modport ext(output address, writeEnable, strobe, dataWrite, input dataRead, ready);
 
 endinterface
 
@@ -42,7 +41,7 @@ interface ICpuDebug;
     // Fetched and decompressed (if necessary) instruction code.
     wire [31:0] insnCode;
     // Pipeline state
-    wire [1:0] state;
+    wire [2:0] state;
 endinterface
 
 typedef enum reg[2:0] {
@@ -51,11 +50,81 @@ typedef enum reg[2:0] {
     HALT,
     // Unsupported instruction code encountered.
     ILLEGAL_INSN,
-    // Memory access to unaligned location requested.
-    UNALIGNED_ACCESS,
     // Internal inconsistency, most probably design bug
     INTERNAL_ERROR
 } TrapIndex;
+
+
+// Decompresses 16 bits instruction code into full 32 bits code (assume two LSB ix 2'b11)
+module RiscvInsnDecompressor(input wire [15:0] insn16, output reg [31:2] insn32);
+
+always @(insn16) begin
+// Implementation is in a generated file
+`include "generated/riscv_insn_decompressor_impl.sv"
+end
+
+endmodule
+
+
+// Multiplexes wires for corresponding register fetching.
+module RiscvRegisterLoad(input wire [31:0] regFile[15],
+                         input wire [3:0] selector,
+                         output reg [31:0] data);
+
+    always @(*) begin
+        if (selector == 0) begin
+            data = 0;
+        end else begin
+            data = regFile[selector - 1];
+        end
+    end
+
+endmodule
+
+// Decoded instruction info
+interface IInsnDecoder;
+    // Load instruction (LB, LBU, LH, LHU, LW)
+    wire isLoad,
+    // Store instruction (SB, SH, SW)
+         isStore;
+    // Trasnfer size for load or store instruction.
+    wire transferByte, transferHalfWord, transferWord;
+    // Extend sign bits when loading byte or half-word.
+    wire loadSigned;
+    // Immediate value if any.
+    reg [31:0] immediate;
+    wire isLui;
+
+endinterface
+
+
+// Decodes instruction opcode, two LSB always are 11 for 32 bit instruction, so do not use them
+module RiscvInsnDecoder(input [31:2] insn32, IInsnDecoder result);
+
+    assign result.isLoad = insn32[6:2] == 5'b00000;
+    assign result.isStore = insn32[6:2] == 5'b01000;
+    assign result.loadSigned = insn32[14];
+    assign result.transferByte = insn32[13:12] == 2'b00;
+    assign result.transferHalfWord = insn32[13:12] == 2'b01;
+    assign result.transferWord = insn32[13:12] == 2'b10;
+    assign result.isLui = insn32[6:2] == 5'b01101;
+
+    always @(insn32) begin
+        if (insn32[6:2] == 5'b11001 || insn32[6:2] == 5'b00000 || insn32[6:2] == 5'b00100) begin
+            // I-type
+            result.immediate = {{21{insn32[31]}}, insn32[30:20]};
+        end else if (insn32[6] == 0 && insn32[4:2] == 3'b101) begin
+            // U-type
+            result.immediate = {insn32[31:12], {12{1'b0}}};
+        end else begin
+            //XXX
+            result.immediate = 0;
+        end
+    end
+
+endmodule
+
+`define IS_INSN32(opcode)  (2'(opcode) == 2'b11)
 
 // RISC-V core minimal implementation.
 module RiscvCore
@@ -69,47 +138,49 @@ module RiscvCore
     `endif
     );
 
-    typedef enum reg[1:0] {
-        // Instruction fetching
+    typedef enum reg[2:0] {
+        // Instruction fetching from memory
         S_INSN_FETCH,
-        // Executing instruction XXX may split into mem read, mem write, alu
-        S_INSN_EXECUTE
+        // Instruction fetched into buffer, execution can be started
+        S_INSN_FETCHED,
+        // Fetching data from memory
+        S_DATA_FETCH,
+        // Storing data into memory
+        S_DATA_STORE,
+
+        // Instruction execution complete, adjust PC and shift opcode buffer
+        S_INSN_DONE
     } State;
 
     localparam TRAP_NONE = (1 << cpuSignals.TRAP_SIZE) - 1;
 
     // Main registers file, x1-x15.
-    reg x[31:0][15];
+    reg [31:0] regFile[15];
     // Program counter. Since it cannot point to unaligned location, it is counted in 16-bits words.
     // At the same time ADDRESS_SIZE corresponds to number of adressable 32-bits words, so the
     // register has ADDRESS_SIZE+1 bits.
     reg [memoryBus.ADDRESS_SIZE:0] pc;
+    wire [memoryBus.ADDRESS_SIZE:0] nextPc = (memoryBus.ADDRESS_SIZE + 1)'(pc + 1'b1);
 
     // Instruction codes are fetched into this buffer. It may contain 16 bits half of previously
     // fetched instruction, in such case next 32 bits are concatenaed there. Little-endian memory
     // layout allows simplifying this concatenation logic.
     reg [47:0] insnBuf;
-    // `insnBuf` contains 16 bits of next instruction code when true during instruction fetch stage.
-    // Otherwise the buffer is empty.
+    // Before instruction fetch:
+    // `insnBuf[15:0]` contains 16 bits of next instruction code when true, otherwise the buffer is
+    // empty.
+    // After instruction fetch:
+    // `insnBuf[47:32]` contains 16 bits of next instruction code and current instruction is 32
+    // bits, `insnBuf[31:16]` contains 16 bits of next instruction code and current instruction is
+    // 16 bits when true. `insnBuf` contains only current instruction code when false.
     reg hasHalfInsn;
 
-    // Instruction has 32 bits code if two LSB are set.
-    wire isInsn32 = insnBuf[1:0] == 2'b11;
-    // Size of data in instruction buffer after fetching stage.
-    // 16 bits in instruction buffer if no leftover chunk and unaligned code fetched.
-    wire isInsnBuf16 = !hasHalfInsn && pc[0];
-    // 32 bits if either leftover chunk concatenated with unaligned code or empty buffer filled with
-    // aligned code.
-    wire isInsnBuf32 = (hasHalfInsn && pc[0]) || (!hasHalfInsn && !pc[0]);
-    // 48 bits if leftover chunk concatenated with aligned code.
-    wire isInsnBuf48 = hasHalfInsn & !pc[0];
-
-    wire [31:0] decompressedInsn;
+    wire [31:2] decompressedInsn;
     RiscvInsnDecompressor insnDcmp(.insn16(insnBuf[15:0]), .insn32(decompressedInsn));
     // Full 32 bits instruction view. Either decompressed or initial full size instruction.
-    wire [31:0] insn32 = isInsn32 ? insnBuf[31:0] : decompressedInsn;
+    wire [31:2] insn32 = `IS_INSN32(insnBuf) ? insnBuf[31:2] : decompressedInsn;
     `ifdef DEBUG
-        assign debug.insnCode = insn32;
+        assign debug.insnCode = {insn32, 2'b11};
     `endif
 
     // Current trap if any, TRAP_NONE if no trap.
@@ -128,11 +199,33 @@ module RiscvCore
     reg [memoryBus.ADDRESS_SIZE-1:0] memAddr;
     reg memStrobe;
     reg memWriteEnable;
+    reg [31:0] memData;
 
     assign memoryBus.address = memAddr;
     assign memoryBus.writeEnable = memWriteEnable;
     assign memoryBus.strobe = memStrobe;
+    assign memoryBus.dataWrite = memData;
 
+    // Register selectors have constant positions in the instruction opcode.
+    wire [31:0] rs1;
+    RiscvRegisterLoad rs1loader(.regFile(regFile), .selector(insn32[18:15]), .data(rs1));
+
+    wire [31:0] rs2;
+    RiscvRegisterLoad rs2loader(.regFile(regFile), .selector(insn32[23:20]), .data(rs2));
+
+    // Latched value to write into rd.
+    reg [31:0] rd;
+    // Strobe for writting into rd.
+    reg rdWrite;
+    // Latched index of rd.
+    reg [3:0] rdIndex;
+
+    IInsnDecoder decoded();
+    RiscvInsnDecoder insnDecoder(.insn32(insn32[31:2]), .result(decoded));
+
+    //XXX may use ALU, check later which approach uses less resources
+    wire [memoryBus.ADDRESS_SIZE+1:0] dataFetchStoreAddr =
+        rs1[memoryBus.ADDRESS_SIZE+1:0] + decoded.immediate[memoryBus.ADDRESS_SIZE+1:0];
 
     always @(posedge cpuSignals.clock) begin
 
@@ -142,10 +235,10 @@ module RiscvCore
             // zeros in general purpose registers after reset (it is usualy true anyway).
             pc <= RESET_PC_ADDRESS >> 1;
             hasHalfInsn <= 0;
-            state <= S_INSN_FETCH;
             trap <= TRAP_NONE;
             memStrobe <= 0;
             memWriteEnable <= 0;
+            state <= S_INSN_FETCH;
 
         end else if (trap == TRAP_NONE) begin
             case (state)
@@ -154,42 +247,107 @@ module RiscvCore
                 if (memoryBus.ready) begin
                     if (pc[0]) begin
                         // Unaligned code required, discard low word.
-                        if (hasHalfInsn) begin
-                            insnBuf[31:16] <= memoryBus.data[31:16];
+                        // Assuming buffer is empty (otherwise it should not reach this place).
+                        insnBuf[15:0] <= memoryBus.dataRead[31:16];
+                        if (`IS_INSN32(memoryBus.dataRead[31:16])) begin
+                            hasHalfInsn <= 1;
                         end else begin
-                            insnBuf[15:0] <= memoryBus.data[31:16];
+                            state <= S_INSN_FETCHED;
                         end
                     end else begin
                         if (hasHalfInsn) begin
-                            insnBuf[47:16] <= memoryBus.data;
+                            // Assuming 32-bits instruction
+                            insnBuf[47:16] <= memoryBus.dataRead;
                         end else begin
-                            insnBuf[31:0] <= memoryBus.data;
+                            insnBuf[31:0] <= memoryBus.dataRead;
+                            if (!`IS_INSN32(memoryBus.dataRead)) begin
+                                hasHalfInsn <= 1;
+                            end
                         end
+                        state <= S_INSN_FETCHED;
                     end
-
+                    pc <= nextPc;
                     memStrobe <= 0;
-
-                    if (isInsn32 && isInsnBuf16) begin
-                        // Buffer contains half of the instruction code, fetch next one.
-                        hasHalfInsn <= 1;
-                        pc <= pc + 1;
-
-                    end else begin
-                        state <= S_INSN_EXECUTE;
-                    end
 
                 end else begin
                     memAddr <= pc[memoryBus.ADDRESS_SIZE:1];
-                    memWriteEnable <= 0;
                     memStrobe <= 1;
                 end
             end
 
-            S_INSN_EXECUTE: begin
+            S_INSN_FETCHED: begin
+                rdIndex <= insn32[10:7];
 
-                // shift insnBuf when done, increment pc
+                // First stage of instruction processing
+                if (decoded.isLoad || (decoded.isStore && !decoded.transferWord)) begin
+                    memAddr <= dataFetchStoreAddr[memoryBus.ADDRESS_SIZE+1:2];
+                    memStrobe <= 1;
+                    state <= S_DATA_FETCH;
+
+                end else if (decoded.isStore) begin
+                    memAddr <= dataFetchStoreAddr[memoryBus.ADDRESS_SIZE+1:2];
+                    memData <= rs2;
+                    memWriteEnable <= 1;
+                    memStrobe <= 1;
+                    state <= S_DATA_STORE;
+
+                end else if (decoded.isLui) begin
+                    rd <= decoded.immediate;
+                    rdWrite <= 1;
+                    state <= S_INSN_DONE;
+                end
+                //XXX
             end
 
+            S_DATA_FETCH: begin
+                if (decoded.isLoad) begin
+                    if (decoded.transferByte) begin
+
+                    end else if (decoded.transferHalfWord) begin
+
+                    end else begin
+                        rd <= memoryBus.dataRead;
+                        rdWrite <= 1;
+                    end
+                    state <= S_INSN_DONE;
+                end else begin
+                    // Fetch before store
+                    //XXX
+                end
+            end
+
+            S_INSN_DONE: begin
+                if (rdWrite) begin
+                    rdWrite <= 0;
+                    if (rdIndex != 4'b0) begin
+                        regFile[rdIndex - 1] <= rd;
+                    end
+                end
+                if (hasHalfInsn) begin
+                    pc <= nextPc;
+                    if (`IS_INSN32(insnBuf)) begin
+                        insnBuf[15:0] <= insnBuf[47:32];
+                        if (`IS_INSN32(insnBuf[47:32])) begin
+                            state <= S_INSN_FETCH;
+                        end else begin
+                            state <= S_INSN_FETCHED;
+                            hasHalfInsn <= 0;
+                        end
+                    end else begin
+                        insnBuf[15:0] <= insnBuf[31:16];
+                        if (`IS_INSN32(insnBuf[31:16])) begin
+                            state <= S_INSN_FETCH;
+                        end else begin
+                            state <= S_INSN_FETCHED;
+                            hasHalfInsn <= 0;
+                        end
+                    end
+                end else begin
+                    state <= S_INSN_FETCH;
+                end
+            end
+
+            //XXX
             default: begin
                 trap <= INTERNAL_ERROR;
             end

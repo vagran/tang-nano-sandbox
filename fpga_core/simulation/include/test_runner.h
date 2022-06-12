@@ -71,11 +71,21 @@ private:
 void
 RegisterTestCase(const std::string &name, const TestCase::Factory &tc);
 
+void
+RegisterTestCaseFunc(const std::string &name, const TestFunc &tc);
+
 
 struct TestCaseRegisterHelper {
     TestCaseRegisterHelper(const std::string &name, const TestCase::Factory &tc)
     {
         RegisterTestCase(name, tc);
+    }
+};
+
+struct TestCaseFuncRegisterHelper {
+    TestCaseFuncRegisterHelper(const std::string &name, const TestFunc &tc)
+    {
+        RegisterTestCaseFunc(name, tc);
     }
 };
 
@@ -90,11 +100,13 @@ struct TestCaseRegisterHelper {
         (__name, [](TestInstance &ti){ return std::make_shared<__cls>(ti); })
 
 #define REGISTER_TEST_FUNC(__name, __tc) \
-    static TestCaseRegisterHelper T_CONCAT(__tcr_, __COUNTER__) \
-        (__name, [tc](TestInstance &ti){ return std::make_shared<SimpleTestCase>(ti, tc))
+    static TestCaseFuncRegisterHelper T_CONCAT(__tcr_, __COUNTER__)(__name, __tc)
 
 
 void
 RunTests(int argc, char **argv);
+
+void
+RunTest(int argc, char **argv, const std::string &testName);
 
 #endif /* INCLUDE_TEST_RUNNER_H */

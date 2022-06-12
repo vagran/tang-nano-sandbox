@@ -860,11 +860,17 @@ class CommandTransform:
     def GenerateVerilogExpression(self, inputVarName):
         """
         :param inputVarName: 16 bits opcode variable name.
-        :return: Expression for decompressed 32 bits opcode.
+        :return: Expression for decompressed 30 bits opcode (assume two LSB is 2'b11)
         """
         s = "{"
         isFirst = True
+        lastComp = self.components[len(self.components) - 1]
+        if not isinstance(lastComp, ConstantBits):
+            raise Exception("Expected constant bits in last component")
+        trimmedLastComp = lastComp.Slice(lastComp.size - 1, 2)
         for c in self.components:
+            if c is lastComp:
+                c = trimmedLastComp
             if not isFirst:
                 s += ", "
             else:

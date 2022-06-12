@@ -10,6 +10,15 @@ ReadWord32(const uint8_t *location)
     return location[0] | (location[1] << 8) | (location[2] << 16) | location[3] << 24;
 }
 
+void
+WriteWord32(uint8_t *location, uint32_t data)
+{
+    location[0] = data & 0xff;
+    location[1] = (data >> 8) & 0xff;
+    location[2] = (data >> 16) & 0xff;
+    location[3] = (data >> 24) & 0xff;
+}
+
 } /* anonymous namespace */
 
 void
@@ -25,13 +34,13 @@ TestInstance::HandleMemory()
             TEST_FAIL("Attempting to write to program memory address "
                       << std::hex << address << "h");
         }
-        module->memData = ReadWord32(progMem.data() + address - PROG_START);
+        module->memDataRead = ReadWord32(progMem.data() + address - PROG_START);
 
     } else if (IsDataAddress(address)) {
         if (module->memWriteEnable) {
-            //XXX
+            WriteWord32(dataMem.data() + address - DATA_START, module->memDataWrite);
         } else {
-            module->memData = ReadWord32(dataMem.data() + address - DATA_START);
+            module->memDataRead = ReadWord32(dataMem.data() + address - DATA_START);
         }
 
     } else {
@@ -56,5 +65,23 @@ TestInstance::CheckTrap()
     //XXX allow expected trap
     if (module->trap != TRAP_NONE) {
         TEST_FAIL("Unexpected trap: " << std::to_string(module->trap));
+    }
+}
+
+void
+TestInstance::LoadProgram(const std::vector<uint8_t> &data, PhysAddress address)
+{
+    uint8_t *p = progMem.data() + address - PROG_START;
+    for (uint8_t b: data) {
+        *p++ = b;
+    }
+}
+
+void
+TestInstance::LoadData(const std::vector<uint8_t> &data, PhysAddress address)
+{
+    uint8_t *p = dataMem.data() + address - DATA_START;
+    for (uint8_t b: data) {
+        *p++ = b;
     }
 }

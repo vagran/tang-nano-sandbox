@@ -12,7 +12,7 @@ FLASH64KZ flash(
     .PROG(0),
     .NVSTR(0),
     .DIN(0),
-    .DOUT(memoryBus.data));
+    .DOUT(memoryBus.dataRead));
 
 assign memoryBus.ready = memoryBus.strobe;
 

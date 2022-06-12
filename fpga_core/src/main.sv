@@ -34,13 +34,27 @@ RiscvCore riscvCore(
 assign cpuSignals.clock = debugHw.btnA;
 assign cpuSignals.reset = !debugHw.btnB;
 assign {debugHw.red, debugHw.green, debugHw.blue} = ~cpuSignals.trap;
-assign cpuSignals.interruptReq = {debugHw.btnA, debugHw.btnB};
-assign debugHw.bits[3:0] = ~memoryBus.address[3:0];
-assign debugHw.bits[4] = ~memoryBus.writeEnable;
-assign debugHw.bits[5] = ~memoryBus.strobe;
-assign debugHw.bits[6] = ~memoryBus.ready;
 
-Memory memory(.memoryBus(memoryBus.mem));
+reg [31:0] sink;
+reg [31:0] drain;
+
+always @(posedge btnA) begin
+    debugHw.bits = sink[7:0];
+    sink <= {sink[7:0], sink[31:8]} ^
+        memoryBus.dataWrite ^ memoryBus.writeEnable ^ memoryBus.strobe;
+    drain <= {drain[30:0], btnB};
+end
+
+assign cpuSignals.interruptReq = drain[1:0];
+
+assign memoryBus.ready = drain[0];
+assign memoryBus.dataRead = drain;
+
+// assign debugHw.bits[4] = ~memoryBus.writeEnable;
+// assign debugHw.bits[5] = ~memoryBus.strobe;
+// assign debugHw.bits[6] = ~memoryBus.ready;
+
+// Memory memory(.memoryBus(memoryBus.mem));
 
 //XXX
 //assign debugHw.bits[0] = debugHw.btnA;

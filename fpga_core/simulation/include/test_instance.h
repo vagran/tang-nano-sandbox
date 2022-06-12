@@ -3,27 +3,7 @@
 
 #include <verilated.h>
 #include <Vriscv_core_test.h>
-
-using PhysAddress = uint16_t;
-
-constexpr PhysAddress PROG_START = 0x2000,
-                      PROG_SIZE = 0x2000,
-                      DATA_START = 0x4000,
-                      DATA_SIZE = 0x2000;
-
-constexpr uint32_t TRAP_NONE = (1 << 3) - 1;
-
-constexpr inline bool
-IsProgAddress(PhysAddress addr)
-{
-    return addr >= PROG_START && addr < PROG_START + PROG_SIZE;
-}
-
-constexpr inline bool
-IsDataAddress(PhysAddress addr)
-{
-    return addr >= DATA_START && addr < DATA_START + DATA_SIZE;
-}
+#include <riscv_core.h>
 
 
 class TestFailException: public std::runtime_error {
@@ -58,8 +38,10 @@ public:
     {
         module->reset = 1;
         module->clock = 0;
+        ctx.timeInc(1);
         module->eval();
         module->clock = 1;
+        ctx.timeInc(1);
         module->eval();
         module->reset = 0;
         clock = 1;
@@ -71,6 +53,7 @@ public:
         clock = !clock;
         module->clock = clock;
         HandleMemory();
+        ctx.timeInc(1);
         module->eval();
         CheckTrap();
     }
@@ -85,6 +68,12 @@ public:
             }
         }
     }
+
+    void
+    LoadProgram(const std::vector<uint8_t> &data, PhysAddress address = PROG_START);
+
+    void
+    LoadData(const std::vector<uint8_t> &data, PhysAddress address = DATA_START);
 
 protected:
     int clock = 0;

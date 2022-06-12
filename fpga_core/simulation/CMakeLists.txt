@@ -17,4 +17,5 @@ add_executable(simulation ${SOURCES})
 
 verilate(simulation SOURCES "${CMAKE_SOURCE_DIR}/../test/riscv_core_test.sv"
          INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/../src"
-         VERILATOR_ARGS --default-language 1800-2017 +define+DEBUG=1)
+         VERILATOR_ARGS --default-language 1800-2017 +define+DEBUG=1 --trace
+         --top-module RiscvCoreTest)

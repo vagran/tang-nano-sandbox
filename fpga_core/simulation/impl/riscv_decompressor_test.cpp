@@ -1,5 +1,4 @@
 #include <test_runner.h>
-#include <riscv_core.h>
 
 
 class DecompressionTestCase: public TestCase {
@@ -18,11 +17,7 @@ public:
         test.progMem[1] = insn16[0];
         test.Reset();
         ASSERT(test.module->dbgState == RiscvCore::State::INSN_FETCH);
-        test.Tick();
-        test.Tick();
-        test.Tick();
-        test.Tick();
-        ASSERT(test.module->dbgState == RiscvCore::State::INSN_EXECUTE);
+        test.Clock(2);
         uint32_t opcode = (insn32[0] << 24) | (insn32[1] << 16) | (insn32[2] << 8) | insn32[3];
         ASSERT(test.module->dbgInsnCode == opcode);
     }
