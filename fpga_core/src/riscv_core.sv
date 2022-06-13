@@ -102,10 +102,42 @@ endmodule
 
 `define IS_INSN32(opcode)  (2'(opcode) == 2'b11)
 
+typedef enum reg[2:0] {
+    //XXX revise for better mapping to opcode
+    OP_ADD,
+    OP_SUB,
+    OP_AND,
+    OP_OR,
+    OP_XOR
+    //XXX shifts
+} AluOp;
+
+module RiscvAlu(input AluOp op, [31:0] x, [31:0] y, output reg [31:0] result);
+
+    always @(*) begin
+        case (op)
+        OP_ADD:
+            result = x + y;
+        OP_SUB:
+            result = x - y;
+        OP_AND:
+            result = x & y;
+        OP_OR:
+            result = x | y;
+
+        /* Assuming XOR. */
+        default:
+            result = x ^ y;
+        endcase
+    end
+
+endmodule;
+
+
 // RISC-V core minimal implementation.
 module RiscvCore
     // Program counter value after reset (byte address)
-    #(parameter RESET_PC_ADDRESS = 0)
+    #(parameter RESET_PC_ADDRESS = 'h1000)
 
     (IMemoryBus memoryBus, ICpu cpuSignals
 
@@ -115,21 +147,28 @@ module RiscvCore
     );
 
     typedef enum reg[2:0] {
+        // Instruction execution complete, adjust PC and shift opcode buffer
+        S_INSN_DONE,
         // Instruction fetching from memory
         S_INSN_FETCH,
         // Instruction fetched into buffer, execution can be started
         S_INSN_FETCHED,
+        S_REG_FETCH,
+        S_REG_STORE,
         // Fetching data from memory
         S_DATA_FETCH,
         // Storing data into memory
         S_DATA_STORE,
-
-        // Instruction execution complete, adjust PC and shift opcode buffer
-        S_INSN_DONE
+        // ALU operation
+        S_ALU
     } State;
 
-    // Main registers file, x1-x15.
-    reg [31:0] regFile[15];
+    // Address from register index.
+    `define REG_ADDR(regIdx)  {{memoryBus.ADDRESS_SIZE-4{1'b0}}, regIdx}
+    // 32-bits word address from (unaligned) byte address.
+    `define TRIM_ADDR(address) address[memoryBus.ADDRESS_SIZE+1:2]
+
+
     // Program counter. Since it cannot point to unaligned location, it is counted in 16-bits words.
     // At the same time ADDRESS_SIZE corresponds to number of adressable 32-bits words, so the
     // register has ADDRESS_SIZE+1 bits.
@@ -178,9 +217,13 @@ module RiscvCore
     IInsnDecoder decoded();
     RiscvInsnDecoder insnDecoder(.insn32(insn32[31:2]), .result(decoded));
 
-    //XXX may use ALU, check later which approach uses less resources
-    // wire [memoryBus.ADDRESS_SIZE+1:0] dataFetchStoreAddr =
-    //     rs1[memoryBus.ADDRESS_SIZE+1:0] + decoded.immediate[memoryBus.ADDRESS_SIZE+1:0];
+    /* Two real registers (and also PC), general purpose registers in RAM. Otherwise not enough
+     * resources on FPGA.
+     */
+    reg [31:0] x, y;
+    AluOp aluOp;
+    wire [31:0] aluResult;
+    RiscvAlu alu(.op(aluOp), .x(x), .y(y), .result(aluResult));
 
     always @(posedge cpuSignals.clock) begin
 
@@ -233,7 +276,10 @@ module RiscvCore
 
                 // First stage of instruction processing
                 if (decoded.isLoad || (decoded.isStore && !decoded.transferWord)) begin
-
+                    // Fetch source address
+                    memAddr <= `REG_ADDR(decoded.rs1Idx);
+                    memStrobe <= 1;
+                    state <= S_REG_FETCH;
                     // memAddr <= dataFetchStoreAddr[memoryBus.ADDRESS_SIZE+1:2];
                     // memStrobe <= 1;
                     // state <= S_DATA_FETCH;
@@ -247,12 +293,48 @@ module RiscvCore
                     // state <= S_DATA_STORE;
 
                 end else if (decoded.isLui) begin
-                    //XXX
-                    // rd <= decoded.immediate;
-                    // rdWrite <= 1;
-                    // state <= S_INSN_DONE;
+                    memData <= decoded.immediate;
+                    memAddr <= `REG_ADDR(decoded.rdIdx);
+                    memWriteEnable <= 1;
+                    memStrobe <= 1;
+                    state <= S_REG_STORE;
                 end
                 //XXX
+            end
+
+            S_REG_FETCH: begin
+                if (memoryBus.ready) begin
+                    memStrobe <= 0;
+                    if (decoded.isLoad || decoded.isStore) begin
+                        x <= memoryBus.dataRead;
+                        y <= decoded.immediate;
+                        aluOp <= OP_ADD;
+                        state <= S_ALU;
+                    end
+                    //XXX
+                end
+            end
+
+            S_REG_STORE: begin
+                if (memoryBus.ready) begin
+                    memStrobe <= 0;
+                    memWriteEnable <= 0;
+                    state <= S_INSN_DONE;
+                end
+            end
+
+            S_ALU: begin
+                if (decoded.isLui) begin
+                    memData <= aluResult;
+                    memAddr <= `REG_ADDR(decoded.rdIdx);
+                    memWriteEnable <= 1;
+                    memStrobe <= 1;
+                    state <= S_REG_STORE;
+                end else if (decoded.isLoad) begin
+                    memAddr <= `TRIM_ADDR(aluResult);
+                    memStrobe <= 1;
+                    state <= S_DATA_FETCH;
+                end
             end
 
             // S_DATA_FETCH: begin

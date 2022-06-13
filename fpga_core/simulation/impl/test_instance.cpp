@@ -37,7 +37,10 @@ TestInstance::HandleMemory()
         module->memDataRead = ReadWord32(progMem.data() + address - PROG_START);
 
     } else if (IsDataAddress(address)) {
-        if (module->memWriteEnable) {
+        if (address == 0) {
+            // x0 register
+            module->memDataRead = 0;
+        } else if (module->memWriteEnable) {
             WriteWord32(dataMem.data() + address - DATA_START, module->memDataWrite);
         } else {
             module->memDataRead = ReadWord32(dataMem.data() + address - DATA_START);
@@ -76,3 +79,21 @@ TestInstance::LoadData(const std::vector<uint8_t> &data, PhysAddress address)
         *p++ = b;
     }
 }
+
+uint32_t
+TestInstance::GetReg(int idx) const
+{
+    return ReadWord32(dataMem.data() + idx * sizeof(uint32_t));
+}
+
+void
+TestInstance::WaitInstructions(int n)
+{
+    do {
+        Clock();
+        if (module->dbgState == 0) {
+            n--;
+        }
+    } while (n);
+}
+

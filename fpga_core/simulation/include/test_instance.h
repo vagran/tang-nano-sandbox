@@ -68,11 +68,18 @@ public:
         }
     }
 
+    uint32_t
+    GetReg(int idx) const;
+
+    /** Run until the specified number of instructions complete. */
+    void
+    WaitInstructions(int n = 1);
+
     void
     LoadProgram(const std::vector<uint8_t> &data, PhysAddress address = PROG_START);
 
     void
-    LoadData(const std::vector<uint8_t> &data, PhysAddress address = DATA_START);
+    LoadData(const std::vector<uint8_t> &data, PhysAddress address = USER_DATA_START);
 
 protected:
     int clock = 0;
