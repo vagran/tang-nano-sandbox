@@ -52,6 +52,19 @@ end
 
 endmodule
 
+typedef enum [3:0] {
+    // Values are direct bits mappings from an opcode.
+    OP_ADD = 4'b0000,
+    OP_SUB = 4'b1000,
+    OP_SLL = 4'b0001,
+    OP_SLT = 4'b0010,
+    OP_SLTU = 4'b0011,
+    OP_XOR = 4'b0100,
+    OP_SRL = 4'b0101,
+    OP_SRA = 4'b1101,
+    OP_OR = 4'b0110,
+    OP_AND = 4'b0111
+} AluOp;
 
 // Decoded instruction info
 interface IInsnDecoder;
@@ -62,11 +75,17 @@ interface IInsnDecoder;
     // Trasnfer size for load or store instruction.
     wire transferByte, transferHalfWord, transferWord;
     // Extend sign bits when loading byte or half-word.
-    wire loadSigned;
+    wire isLoadSigned;
     // Immediate value if any.
     reg [31:0] immediate;
     wire isLui;
     wire [3:0] rs1Idx, rs2Idx, rdIdx;
+    // ALU operation.
+    wire isAluOp;
+    // ALU operation code if isAluOp is true.
+    wire AluOp aluOp;
+    // True operation with rs1 and immediate value, false if operation on rs1 and rs2.
+    wire isAluImmediate;
 
 endinterface
 
@@ -76,11 +95,11 @@ module RiscvInsnDecoder(input [31:2] insn32, IInsnDecoder result);
 
     assign result.isLoad = insn32[6:2] == 5'b00000;
     assign result.isStore = insn32[6:2] == 5'b01000;
-    assign result.loadSigned = insn32[14];
+    assign result.isLoadSigned = !insn32[14];
     assign result.transferByte = insn32[13:12] == 2'b00;
     assign result.transferHalfWord = insn32[13:12] == 2'b01;
     assign result.transferWord = insn32[13:12] == 2'b10;
-    assign result.isLui = insn32[6:2] == 5'b01101;
+
     assign result.rs1Idx = insn32[18:15];
     assign result.rs2Idx = insn32[23:20];
     assign result.rdIdx = insn32[10:7];
@@ -92,25 +111,26 @@ module RiscvInsnDecoder(input [31:2] insn32, IInsnDecoder result);
         end else if (insn32[6] == 0 && insn32[4:2] == 3'b101) begin
             // U-type
             result.immediate = {insn32[31:12], {12{1'b0}}};
+        end else if (insn32[6:2] == 5'b01000) begin
+            // S-type
+            result.immediate = {{20{insn32[31]}}, insn32[31:25], insn32[11:7]};
         end else begin
             //XXX
             result.immediate = 0;
         end
     end
 
+    assign result.isLui = insn32[6:2] == 5'b01101;
+
+    assign result.isAluOp = insn32[6] == 1'b0 && insn32[4:2] == 3'b100;
+    assign result.isAluImmediate = !insn32[5];
+    // Ignore bit 30 (set to zero in the result) when immediate operation (bit 5 is zero), bit 30 is
+    // part of immediate value in such case.
+    assign result.aluOp = AluOp'({insn32[5] & insn32[30], insn32[14:12]});
+
 endmodule
 
 `define IS_INSN32(opcode)  (2'(opcode) == 2'b11)
-
-typedef enum reg[2:0] {
-    //XXX revise for better mapping to opcode
-    OP_ADD,
-    OP_SUB,
-    OP_AND,
-    OP_OR,
-    OP_XOR
-    //XXX shifts
-} AluOp;
 
 module RiscvAlu(input AluOp op, [31:0] x, [31:0] y, output reg [31:0] result);
 
@@ -157,8 +177,6 @@ module RiscvCore
         S_REG_STORE,
         // Fetching data from memory
         S_DATA_FETCH,
-        // Storing data into memory
-        S_DATA_STORE,
         // ALU operation
         S_ALU
     } State;
@@ -174,6 +192,9 @@ module RiscvCore
     // register has ADDRESS_SIZE+1 bits.
     reg [memoryBus.ADDRESS_SIZE:0] pc;
     wire [memoryBus.ADDRESS_SIZE:0] nextPc = (memoryBus.ADDRESS_SIZE + 1)'(pc + 1'b1);
+    // Additional PC increment required in S_INSN_FETCHED state (when fetched aligned 32-bits
+    // opcode).
+    reg wantPcInc;
 
     // Instruction codes are fetched into this buffer. It may contain 16 bits half of previously
     // fetched instruction, in such case next 32 bits are concatenaed there. Little-endian memory
@@ -225,9 +246,11 @@ module RiscvCore
     wire [31:0] aluResult;
     RiscvAlu alu(.op(aluOp), .x(x), .y(y), .result(aluResult));
 
+    // True when fetching rs2 in S_REG_FETCH state.
+    reg fetchRs2;
+
     always @(posedge cpuSignals.clock) begin
 
-        //XXX
         if (cpuSignals.reset) begin
             // Do only minimal intialization to save some resources. Software should not assume
             // zeros in general purpose registers after reset (it is usualy true anyway).
@@ -236,6 +259,8 @@ module RiscvCore
             memStrobe <= 0;
             memWriteEnable <= 0;
             state <= S_INSN_FETCH;
+            wantPcInc <= 0;
+            fetchRs2 <= 0;
 
         end else begin
             case (state)
@@ -259,6 +284,8 @@ module RiscvCore
                             insnBuf[31:0] <= memoryBus.dataRead;
                             if (!`IS_INSN32(memoryBus.dataRead)) begin
                                 hasHalfInsn <= 1;
+                            end else begin
+                                wantPcInc <= 1;
                             end
                         end
                         state <= S_INSN_FETCHED;
@@ -274,30 +301,26 @@ module RiscvCore
 
             S_INSN_FETCHED: begin
 
-                // First stage of instruction processing
-                if (decoded.isLoad || (decoded.isStore && !decoded.transferWord)) begin
-                    // Fetch source address
-                    memAddr <= `REG_ADDR(decoded.rs1Idx);
-                    memStrobe <= 1;
-                    state <= S_REG_FETCH;
-                    // memAddr <= dataFetchStoreAddr[memoryBus.ADDRESS_SIZE+1:2];
-                    // memStrobe <= 1;
-                    // state <= S_DATA_FETCH;
+                if (wantPcInc) begin
+                    wantPcInc <= 0;
+                    pc <= nextPc;
+                end else begin
 
-                end else if (decoded.isStore) begin
-                    //XXX
-                    // memAddr <= dataFetchStoreAddr[memoryBus.ADDRESS_SIZE+1:2];
-                    // memData <= rs2;
-                    // memWriteEnable <= 1;
-                    // memStrobe <= 1;
-                    // state <= S_DATA_STORE;
+                    // First stage of instruction processing
+                    if (decoded.isLoad || decoded.isStore || decoded.isAluOp) begin
+                        // Fetch source address
+                        memAddr <= `REG_ADDR(decoded.rs1Idx);
+                        memStrobe <= 1;
+                        state <= S_REG_FETCH;
 
-                end else if (decoded.isLui) begin
-                    memData <= decoded.immediate;
-                    memAddr <= `REG_ADDR(decoded.rdIdx);
-                    memWriteEnable <= 1;
-                    memStrobe <= 1;
-                    state <= S_REG_STORE;
+                    end else if (decoded.isLui) begin
+                        memData <= decoded.immediate;
+                        memAddr <= `REG_ADDR(decoded.rdIdx);
+                        memWriteEnable <= 1;
+                        memStrobe <= 1;
+                        state <= S_REG_STORE;
+                    end
+
                 end
                 //XXX
             end
@@ -305,17 +328,58 @@ module RiscvCore
             S_REG_FETCH: begin
                 if (memoryBus.ready) begin
                     memStrobe <= 0;
-                    if (decoded.isLoad || decoded.isStore) begin
+                    fetchRs2 <= 0;
+                    if (decoded.isAluOp) begin
+                        x <= memoryBus.dataRead;//XXX move out
+                        if (decoded.isAluImmediate) begin
+                            y <= decoded.immediate;
+                            aluOp <= decoded.aluOp;
+                            state <= S_ALU;
+                        end else begin
+                            //XXX
+                        end
+
+                    end else if (decoded.isLoad || (decoded.isStore && !fetchRs2)) begin
                         x <= memoryBus.dataRead;
                         y <= decoded.immediate;
                         aluOp <= OP_ADD;
                         state <= S_ALU;
+
+                    end else if (decoded.isStore) begin
+                        // rs2 fetched, x[1:0] contains address LSB, y - store address, memData -
+                        // previously fetched word.
+                        memAddr <= y[memoryBus.ADDRESS_SIZE-1:0];
+                        if (decoded.transferByte) begin
+                            case (x[1:0])
+                            2'b00:
+                                memData[7:0] <= memoryBus.dataRead[7:0];
+                            2'b01:
+                                memData[15:8] <= memoryBus.dataRead[7:0];
+                            2'b10:
+                                memData[23:16] <= memoryBus.dataRead[7:0];
+                            2'b11:
+                                memData[31:24] <= memoryBus.dataRead[7:0];
+                            endcase
+                        end else if (decoded.transferHalfWord) begin
+                            if (x[1]) begin
+                                memData[31:16] <= memoryBus.dataRead[15:0];
+                            end else begin
+                                memData[15:0] <= memoryBus.dataRead[15:0];
+                            end
+                        end else begin
+                            memData <= memoryBus.dataRead;
+                        end
+                        memWriteEnable <= 1;
+                        memStrobe <= 1;
+                        // S_REG_STORE can be reused for data store here.
+                        state <= S_REG_STORE;
                     end
                     //XXX
                 end
             end
 
             S_REG_STORE: begin
+                // It is always the last operation
                 if (memoryBus.ready) begin
                     memStrobe <= 0;
                     memWriteEnable <= 0;
@@ -324,35 +388,73 @@ module RiscvCore
             end
 
             S_ALU: begin
-                if (decoded.isLui) begin
-                    memData <= aluResult;
+                if (decoded.isAluOp) begin
+                    memData <= alu.result;
                     memAddr <= `REG_ADDR(decoded.rdIdx);
                     memWriteEnable <= 1;
                     memStrobe <= 1;
                     state <= S_REG_STORE;
-                end else if (decoded.isLoad) begin
+
+                end else if (decoded.isLoad || decoded.isStore) begin
+                    // Actually do not need to load before storing full word but make it so to save
+                    // some LUTs.
+                    //XXX check later
                     memAddr <= `TRIM_ADDR(aluResult);
+                    // Save address LSB for 16-bits and 8-bits loads
+                    x[1:0] <= aluResult[1:0];
                     memStrobe <= 1;
                     state <= S_DATA_FETCH;
                 end
             end
 
-            // S_DATA_FETCH: begin
-            //     if (decoded.isLoad) begin
-            //         if (decoded.transferByte) begin
-            //             //XXX
-            //         end else if (decoded.transferHalfWord) begin
-            //             //XXX
-            //         end else begin
-            //             rd <= memoryBus.dataRead;
-            //             rdWrite <= 1;
-            //         end
-            //         state <= S_INSN_DONE;
-            //     end else begin
-            //         // Fetch before store
-            //         //XXX
-            //     end
-            // end
+            S_DATA_FETCH: begin
+                if (decoded.isLoad) begin
+                    // x[1:0] contains address LSB
+                    if (decoded.transferByte) begin
+                        case (x[1:0])
+                        2'b00:
+                            memData[7:0] <= memoryBus.dataRead[7:0];
+                        2'b01:
+                            memData[7:0] <= memoryBus.dataRead[15:8];
+                        2'b10:
+                            memData[7:0] <= memoryBus.dataRead[23:16];
+                        2'b11:
+                            memData[7:0] <= memoryBus.dataRead[31:24];
+                        endcase
+                        if (decoded.isLoadSigned) begin
+                            memData[31:8] <= {24{memoryBus.dataRead[7]}};
+                        end else begin
+                            memData[31:8] <= 24'b0;
+                        end
+                    end else if (decoded.transferHalfWord) begin
+                        if (x[1]) begin
+                            memData[15:0] <= memoryBus.dataRead[31:16];
+                        end else begin
+                            memData[15:0] <= memoryBus.dataRead[15:0];
+                        end
+                        if (decoded.isLoadSigned) begin
+                            memData[31:16] <= {16{memoryBus.dataRead[15]}};
+                        end else begin
+                            memData[31:16] <= 16'b0;
+                        end
+                    end else begin
+                        memData <= memoryBus.dataRead;
+                    end
+                    memAddr <= `REG_ADDR(decoded.rdIdx);
+                    memWriteEnable <= 1;
+                    memStrobe <= 1;
+                    state <= S_REG_STORE;
+
+                end else begin
+                    // Fetch before store
+                    memData <= memoryBus.dataRead;
+                    y[memoryBus.ADDRESS_SIZE-1:0] <= memAddr;
+                    memAddr <= `REG_ADDR(decoded.rs2Idx);
+                    memStrobe <= 1;
+                    fetchRs2 <= 1;
+                    state <= S_REG_FETCH;
+                end
+            end
 
             /* Assuming S_INSN_DONE */
             default: begin

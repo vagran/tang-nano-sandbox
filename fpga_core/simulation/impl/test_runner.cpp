@@ -15,7 +15,9 @@ RegisterTestCase(const std::string &name, const TestCase::Factory &tc)
     if (!tests) {
         tests = new std::map<std::string, TestCase::Factory>();
     }
-    tests->emplace(name, tc);
+    if (!tests->emplace(name, tc).second) {
+        throw std::runtime_error(std::string("Duplicated test name: ") + name);
+    }
 }
 
 void

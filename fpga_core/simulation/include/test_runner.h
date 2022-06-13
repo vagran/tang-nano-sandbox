@@ -2,7 +2,7 @@
 #define INCLUDE_TEST_RUNNER_H
 
 #include <test_instance.h>
-
+#include <sstream>
 
 class TestException: public std::runtime_error {
 public:
@@ -21,12 +21,17 @@ public:
 
 #define ASSERT(__condition) do { \
     if (!(__condition)) { \
-        std::string msg = "Assert failed: "; \
-        msg += # __condition; \
-        FAIL(msg); \
+        FAIL( "Assert failed: " # __condition); \
     } \
 } while (false)
 
+#define ASSERT_EQUAL(__v1, __v2) do { \
+    if ((__v1) != (__v2)) { \
+        std::stringstream ss; \
+        ss << "Assert failed: " # __v1 "(" << (__v1) << ") != " # __v2 "(" << (__v2) << ")"; \
+        FAIL(ss.str()); \
+    } \
+} while (false)
 
 class TestCase {
 public:

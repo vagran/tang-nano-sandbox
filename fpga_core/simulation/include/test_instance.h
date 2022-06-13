@@ -71,6 +71,9 @@ public:
     uint32_t
     GetReg(int idx) const;
 
+    uint32_t
+    GetDataMem32(PhysAddress address);
+
     /** Run until the specified number of instructions complete. */
     void
     WaitInstructions(int n = 1);
