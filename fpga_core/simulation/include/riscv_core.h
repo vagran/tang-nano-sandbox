@@ -17,7 +17,7 @@ using PhysAddress = uint16_t;
 
 constexpr PhysAddress PROG_START = 0x2000,
                       PROG_SIZE = 0x2000,
-                      DATA_START = 0x4000,
+                      DATA_START = 0x0000,
                       DATA_SIZE = 0x2000;
 
 constexpr uint32_t TRAP_NONE = (1 << 3) - 1;

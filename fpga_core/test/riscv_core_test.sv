@@ -9,7 +9,6 @@ module RiscvCoreTest(
     input [1:0] interruptReq,
     input memReady,
     input reg [31:0] memDataRead,
-    output [TRAP_SIZE-1:0] trap,
     output [ADDRESS_SIZE-1:0] memAddress,
     output memStrobe,
     output memWriteEnable,
@@ -18,7 +17,6 @@ module RiscvCoreTest(
     output [2:0] dbgState);
 
     parameter ADDRESS_SIZE = 15;
-    parameter TRAP_SIZE = 3;
 
     IMemoryBus #(.ADDRESS_SIZE(ADDRESS_SIZE)) memoryBus();
     assign memoryBus.ready = memReady;
@@ -28,11 +26,10 @@ module RiscvCoreTest(
     assign memDataWrite = memoryBus.dataWrite;
     assign memWriteEnable = memoryBus.writeEnable;
 
-    ICpu #(.TRAP_SIZE(TRAP_SIZE)) cpuSignals();
+    ICpu cpuSignals();
     assign cpuSignals.clock = clock;
     assign cpuSignals.reset = reset;
     assign cpuSignals.interruptReq = interruptReq;
-    assign trap = cpuSignals.trap;
 
     ICpuDebug dbg();
     assign dbgInsnCode = dbg.insnCode;

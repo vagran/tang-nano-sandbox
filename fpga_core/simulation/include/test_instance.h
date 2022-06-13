@@ -55,7 +55,6 @@ public:
         HandleMemory();
         ctx.timeInc(1);
         module->eval();
-        CheckTrap();
     }
 
     void
@@ -80,9 +79,6 @@ protected:
 
     void
     HandleMemory();
-
-    void
-    CheckTrap();
 
     void
     Fail(const char *file, int line, const char *msg);

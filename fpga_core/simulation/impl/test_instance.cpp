@@ -60,15 +60,6 @@ TestInstance::Fail(const char *file, int line, const char *msg)
 }
 
 void
-TestInstance::CheckTrap()
-{
-    //XXX allow expected trap
-    if (module->trap != TRAP_NONE) {
-        TEST_FAIL("Unexpected trap: " << std::to_string(module->trap));
-    }
-}
-
-void
 TestInstance::LoadProgram(const std::vector<uint8_t> &data, PhysAddress address)
 {
     uint8_t *p = progMem.data() + address - PROG_START;

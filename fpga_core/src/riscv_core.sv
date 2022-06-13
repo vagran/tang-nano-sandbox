@@ -19,8 +19,7 @@ interface IMemoryBus
 endinterface
 
 // Common CPU signals.
-interface ICpu
-    #(parameter TRAP_SIZE = 2);
+interface ICpu;
 
     // Most actions on rising edge.
     wire clock;
@@ -29,11 +28,9 @@ interface ICpu
     wire reset;
     // Interrupt request. No request when all ones, interrupt index otherwise.
     wire [1:0] interruptReq;
-    // Trap indication. No trap if all ones, trap index otherwise.
-    wire [TRAP_SIZE-1:0] trap;
 
-    modport cpu(input clock, reset, interruptReq, output trap);
-    modport ext(output clock, reset, interruptReq, input trap);
+    modport cpu(input clock, reset, interruptReq);
+    modport ext(output clock, reset, interruptReq);
 endinterface
 
 // Used for testing in simulation. Debugging code is only compiled if `DEBUG` symbol is defined.
@@ -43,16 +40,6 @@ interface ICpuDebug;
     // Pipeline state
     wire [2:0] state;
 endinterface
-
-typedef enum reg[2:0] {
-    // Halt instruction encountered. Also halted after power off until reset if all registers are
-    // initialized to zero.
-    HALT,
-    // Unsupported instruction code encountered.
-    ILLEGAL_INSN,
-    // Internal inconsistency, most probably design bug
-    INTERNAL_ERROR
-} TrapIndex;
 
 
 // Decompresses 16 bits instruction code into full 32 bits code (assume two LSB ix 2'b11)
@@ -65,21 +52,6 @@ end
 
 endmodule
 
-
-// Multiplexes wires for corresponding register fetching.
-module RiscvRegisterLoad(input wire [31:0] regFile[15],
-                         input wire [3:0] selector,
-                         output reg [31:0] data);
-
-    always @(*) begin
-        if (selector == 0) begin
-            data = 0;
-        end else begin
-            data = regFile[selector - 1];
-        end
-    end
-
-endmodule
 
 // Decoded instruction info
 interface IInsnDecoder;
@@ -94,6 +66,7 @@ interface IInsnDecoder;
     // Immediate value if any.
     reg [31:0] immediate;
     wire isLui;
+    wire [3:0] rs1Idx, rs2Idx, rdIdx;
 
 endinterface
 
@@ -108,6 +81,9 @@ module RiscvInsnDecoder(input [31:2] insn32, IInsnDecoder result);
     assign result.transferHalfWord = insn32[13:12] == 2'b01;
     assign result.transferWord = insn32[13:12] == 2'b10;
     assign result.isLui = insn32[6:2] == 5'b01101;
+    assign result.rs1Idx = insn32[18:15];
+    assign result.rs2Idx = insn32[23:20];
+    assign result.rdIdx = insn32[10:7];
 
     always @(insn32) begin
         if (insn32[6:2] == 5'b11001 || insn32[6:2] == 5'b00000 || insn32[6:2] == 5'b00100) begin
@@ -152,8 +128,6 @@ module RiscvCore
         S_INSN_DONE
     } State;
 
-    localparam TRAP_NONE = (1 << cpuSignals.TRAP_SIZE) - 1;
-
     // Main registers file, x1-x15.
     reg [31:0] regFile[15];
     // Program counter. Since it cannot point to unaligned location, it is counted in 16-bits words.
@@ -183,11 +157,6 @@ module RiscvCore
         assign debug.insnCode = {insn32, 2'b11};
     `endif
 
-    // Current trap if any, TRAP_NONE if no trap.
-    reg [cpuSignals.TRAP_SIZE-1:0] trap;
-
-    assign cpuSignals.trap = trap;
-
     // Current state.
     State state;
 
@@ -206,26 +175,12 @@ module RiscvCore
     assign memoryBus.strobe = memStrobe;
     assign memoryBus.dataWrite = memData;
 
-    // Register selectors have constant positions in the instruction opcode.
-    wire [31:0] rs1;
-    RiscvRegisterLoad rs1loader(.regFile(regFile), .selector(insn32[18:15]), .data(rs1));
-
-    wire [31:0] rs2;
-    RiscvRegisterLoad rs2loader(.regFile(regFile), .selector(insn32[23:20]), .data(rs2));
-
-    // Latched value to write into rd.
-    reg [31:0] rd;
-    // Strobe for writting into rd.
-    reg rdWrite;
-    // Latched index of rd.
-    reg [3:0] rdIndex;
-
     IInsnDecoder decoded();
     RiscvInsnDecoder insnDecoder(.insn32(insn32[31:2]), .result(decoded));
 
     //XXX may use ALU, check later which approach uses less resources
-    wire [memoryBus.ADDRESS_SIZE+1:0] dataFetchStoreAddr =
-        rs1[memoryBus.ADDRESS_SIZE+1:0] + decoded.immediate[memoryBus.ADDRESS_SIZE+1:0];
+    // wire [memoryBus.ADDRESS_SIZE+1:0] dataFetchStoreAddr =
+    //     rs1[memoryBus.ADDRESS_SIZE+1:0] + decoded.immediate[memoryBus.ADDRESS_SIZE+1:0];
 
     always @(posedge cpuSignals.clock) begin
 
@@ -235,12 +190,11 @@ module RiscvCore
             // zeros in general purpose registers after reset (it is usualy true anyway).
             pc <= RESET_PC_ADDRESS >> 1;
             hasHalfInsn <= 0;
-            trap <= TRAP_NONE;
             memStrobe <= 0;
             memWriteEnable <= 0;
             state <= S_INSN_FETCH;
 
-        end else if (trap == TRAP_NONE) begin
+        end else begin
             case (state)
 
             S_INSN_FETCH: begin
@@ -276,53 +230,50 @@ module RiscvCore
             end
 
             S_INSN_FETCHED: begin
-                rdIndex <= insn32[10:7];
 
                 // First stage of instruction processing
                 if (decoded.isLoad || (decoded.isStore && !decoded.transferWord)) begin
-                    memAddr <= dataFetchStoreAddr[memoryBus.ADDRESS_SIZE+1:2];
-                    memStrobe <= 1;
-                    state <= S_DATA_FETCH;
+
+                    // memAddr <= dataFetchStoreAddr[memoryBus.ADDRESS_SIZE+1:2];
+                    // memStrobe <= 1;
+                    // state <= S_DATA_FETCH;
 
                 end else if (decoded.isStore) begin
-                    memAddr <= dataFetchStoreAddr[memoryBus.ADDRESS_SIZE+1:2];
-                    memData <= rs2;
-                    memWriteEnable <= 1;
-                    memStrobe <= 1;
-                    state <= S_DATA_STORE;
+                    //XXX
+                    // memAddr <= dataFetchStoreAddr[memoryBus.ADDRESS_SIZE+1:2];
+                    // memData <= rs2;
+                    // memWriteEnable <= 1;
+                    // memStrobe <= 1;
+                    // state <= S_DATA_STORE;
 
                 end else if (decoded.isLui) begin
-                    rd <= decoded.immediate;
-                    rdWrite <= 1;
-                    state <= S_INSN_DONE;
+                    //XXX
+                    // rd <= decoded.immediate;
+                    // rdWrite <= 1;
+                    // state <= S_INSN_DONE;
                 end
                 //XXX
             end
 
-            S_DATA_FETCH: begin
-                if (decoded.isLoad) begin
-                    if (decoded.transferByte) begin
+            // S_DATA_FETCH: begin
+            //     if (decoded.isLoad) begin
+            //         if (decoded.transferByte) begin
+            //             //XXX
+            //         end else if (decoded.transferHalfWord) begin
+            //             //XXX
+            //         end else begin
+            //             rd <= memoryBus.dataRead;
+            //             rdWrite <= 1;
+            //         end
+            //         state <= S_INSN_DONE;
+            //     end else begin
+            //         // Fetch before store
+            //         //XXX
+            //     end
+            // end
 
-                    end else if (decoded.transferHalfWord) begin
-
-                    end else begin
-                        rd <= memoryBus.dataRead;
-                        rdWrite <= 1;
-                    end
-                    state <= S_INSN_DONE;
-                end else begin
-                    // Fetch before store
-                    //XXX
-                end
-            end
-
-            S_INSN_DONE: begin
-                if (rdWrite) begin
-                    rdWrite <= 0;
-                    if (rdIndex != 4'b0) begin
-                        regFile[rdIndex - 1] <= rd;
-                    end
-                end
+            /* Assuming S_INSN_DONE */
+            default: begin
                 if (hasHalfInsn) begin
                     pc <= nextPc;
                     if (`IS_INSN32(insnBuf)) begin
@@ -345,11 +296,6 @@ module RiscvCore
                 end else begin
                     state <= S_INSN_FETCH;
                 end
-            end
-
-            //XXX
-            default: begin
-                trap <= INTERNAL_ERROR;
             end
 
             endcase;

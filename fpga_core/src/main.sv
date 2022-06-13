@@ -24,7 +24,7 @@ assign blue = debugHw.blue;
 assign bits = debugHw.bits;
 
 IMemoryBus #(.ADDRESS_SIZE(ADDRESS_SIZE)) memoryBus();
-ICpu #(.TRAP_SIZE(TRAP_SIZE)) cpuSignals();
+ICpu cpuSignals();
 
 RiscvCore riscvCore(
     .memoryBus(memoryBus.ext),
@@ -33,7 +33,6 @@ RiscvCore riscvCore(
 //XXX
 assign cpuSignals.clock = debugHw.btnA;
 assign cpuSignals.reset = !debugHw.btnB;
-assign {debugHw.red, debugHw.green, debugHw.blue} = ~cpuSignals.trap;
 
 reg [31:0] sink;
 reg [31:0] drain;
