@@ -107,7 +107,7 @@ module RiscvInsnDecoder(input [31:2] insn32, IInsnDecoder result);
     always @(insn32) begin
         if (insn32[6:2] == 5'b11001 || insn32[6:2] == 5'b00000 || insn32[6:2] == 5'b00100) begin
             // I-type
-            result.immediate = {{21{insn32[31]}}, insn32[30:20]};
+            result.immediate = {{20{insn32[31]}}, insn32[31:20]};
         end else if (insn32[6] == 0 && insn32[4:2] == 3'b101) begin
             // U-type
             result.immediate = {insn32[31:12], {12{1'b0}}};
@@ -125,8 +125,9 @@ module RiscvInsnDecoder(input [31:2] insn32, IInsnDecoder result);
     assign result.isAluOp = insn32[6] == 1'b0 && insn32[4:2] == 3'b100;
     assign result.isAluImmediate = !insn32[5];
     // Ignore bit 30 (set to zero in the result) when immediate operation (bit 5 is zero), bit 30 is
-    // part of immediate value in such case.
-    assign result.aluOp = AluOp'({insn32[5] & insn32[30], insn32[14:12]});
+    // part of immediate value in such case. SRAI is exception,
+    assign result.aluOp =
+        AluOp'({(insn32[5] || insn32[14:12] == 3'b100) && insn32[30], insn32[14:12]});
 
 endmodule
 
@@ -144,10 +145,20 @@ module RiscvAlu(input AluOp op, [31:0] x, [31:0] y, output reg [31:0] result);
             result = x & y;
         OP_OR:
             result = x | y;
-
-        /* Assuming XOR. */
-        default:
+        OP_XOR:
             result = x ^ y;
+        OP_SLL:
+            result = x << y;
+        OP_SRL:
+            result = x >> y;
+        OP_SRA:
+            result = x >>> y;
+        OP_SLT:
+            result = $signed(x) < $signed(y) ? 32'b1 : 32'b0;
+        /* Assuming SLTU. */
+        default:
+            result = x < y ? 32'b1 : 32'b0;
+
         endcase
     end
 
