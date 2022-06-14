@@ -148,11 +148,11 @@ module RiscvAlu(input AluOp op, [31:0] x, [31:0] y, output reg [31:0] result);
         OP_XOR:
             result = x ^ y;
         OP_SLL:
-            result = x << y;
+            result = x << y[4:0];
         OP_SRL:
-            result = x >> y;
+            result = x >> y[4:0];
         OP_SRA:
-            result = x >>> y;
+            result = x >>> y[4:0];
         OP_SLT:
             result = $signed(x) < $signed(y) ? 32'b1 : 32'b0;
         /* Assuming SLTU. */
