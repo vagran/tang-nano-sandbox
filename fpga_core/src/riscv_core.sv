@@ -127,7 +127,7 @@ module RiscvInsnDecoder(input [31:2] insn32, IInsnDecoder result);
     // Ignore bit 30 (set to zero in the result) when immediate operation (bit 5 is zero), bit 30 is
     // part of immediate value in such case. SRAI is exception,
     assign result.aluOp =
-        AluOp'({(insn32[5] || insn32[14:12] == 3'b100) && insn32[30], insn32[14:12]});
+        AluOp'({(insn32[5] || insn32[14:12] == 3'b101) && insn32[30], insn32[14:12]});
 
 endmodule
 
