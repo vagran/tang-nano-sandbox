@@ -10,9 +10,9 @@ main(int argc, char **argv, char **)
 {
     std::cout << "\n================= Simulation =================\n";
 
-    // RunTests(argc, argv);
+    RunTests(argc, argv);
     //XXX
-    RunTest(argc, argv, "Byte memory transfer");
+    // RunTest(argc, argv, "Byte memory transfer");
 
     return 0;
 }

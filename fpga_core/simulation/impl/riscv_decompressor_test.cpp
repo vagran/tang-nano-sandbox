@@ -16,10 +16,12 @@ public:
         test.progMem[0] = insn16[1];
         test.progMem[1] = insn16[0];
         test.Reset();
-        ASSERT(test.module->dbgState == RiscvCore::State::INSN_FETCH);
-        test.Clock(2);
+        ASSERT_EQUAL(test.module->dbgState, RiscvCore::State::INSN_FETCH);
+        while (test.module->dbgState != RiscvCore::State::INSN_FETCHED) {
+            test.Clock();
+        }
         uint32_t opcode = (insn32[0] << 24) | (insn32[1] << 16) | (insn32[2] << 8) | insn32[3];
-        ASSERT(test.module->dbgInsnCode == opcode);
+        ASSERT_EQUAL(test.module->dbgInsnCode, opcode);
     }
 
 private:

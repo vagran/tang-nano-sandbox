@@ -28,22 +28,22 @@ TestInstance::HandleMemory()
         module->memReady = 0;
         return;
     }
-    PhysAddress address = module->memAddress << 2;
+    PhysAddress address = module->memAddress;
     if (IsProgAddress(address)) {
         if (module->memWriteEnable) {
             TEST_FAIL("Attempting to write to program memory address "
                       << std::hex << address << "h");
         }
-        module->memDataRead = ReadWord32(progMem.data() + address - PROG_START);
+        module->memDataRead = *(progMem.data() + address - PROG_START);
 
     } else if (IsDataAddress(address)) {
         if (address == 0) {
             // x0 register
             module->memDataRead = 0;
         } else if (module->memWriteEnable) {
-            WriteWord32(dataMem.data() + address - DATA_START, module->memDataWrite);
+            *(dataMem.data() + address - DATA_START) = module->memDataWrite;
         } else {
-            module->memDataRead = ReadWord32(dataMem.data() + address - DATA_START);
+            module->memDataRead = *(dataMem.data() + address - DATA_START);
         }
 
     } else {

@@ -12,7 +12,7 @@ endinterface
 module main(input btnA, btnB,
             output red, green, blue, [7:0] bits);
 
-parameter ADDRESS_SIZE = 15;
+parameter ADDRESS_SIZE = 16;
 parameter TRAP_SIZE = 3;
 
 IDebugHw debugHw();
@@ -34,13 +34,14 @@ RiscvCore riscvCore(
 assign cpuSignals.clock = debugHw.btnA;
 assign cpuSignals.reset = !debugHw.btnB;
 
-reg [31:0] sink;
-reg [31:0] drain;
+reg [7:0] sink;
+reg [7:0] drain;
 
 always @(posedge btnA) begin
     debugHw.bits = sink[7:0];
-    sink <= {sink[7:0], sink[31:8]} ^
-        memoryBus.dataWrite ^ memoryBus.writeEnable ^ memoryBus.strobe;
+    sink <= {sink[0], sink[7:1]} ^
+        memoryBus.dataWrite ^ memoryBus.writeEnable ^ memoryBus.strobe ^ memoryBus.address[15:8] ^
+        memoryBus.address[7:0];
     drain <= {drain[30:0], btnB};
 end
 

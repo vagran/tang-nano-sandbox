@@ -1,6 +1,8 @@
 #include <test_runner.h>
 #include <iostream>
 
+//XXX
+#if 0
 
 REGISTER_TEST_FUNC("LUI", ([](TestInstance &ti){
     /*
@@ -212,3 +214,5 @@ REGISTER_TEST_FUNC("Byte memory transfer", ([](TestInstance &ti){
     ti.WaitInstructions();
     ASSERT_EQUAL(ti.GetDataMem32(USER_DATA_START + 20), 0x85cccccc);
 }));
+
+#endif

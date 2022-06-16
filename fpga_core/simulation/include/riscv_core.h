@@ -8,6 +8,7 @@ class RiscvCore {
 public:
     enum State {
         INSN_FETCH,
+        INSN_FETCHED,
         INSN_EXECUTE
     };
 

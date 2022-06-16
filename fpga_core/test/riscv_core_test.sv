@@ -8,15 +8,15 @@ module RiscvCoreTest(
     input reset,
     input [1:0] interruptReq,
     input memReady,
-    input reg [31:0] memDataRead,
+    input reg [7:0] memDataRead,
     output [ADDRESS_SIZE-1:0] memAddress,
     output memStrobe,
     output memWriteEnable,
-    output reg [31:0] memDataWrite,
+    output reg [7:0] memDataWrite,
     output [31:0] dbgInsnCode,
     output [2:0] dbgState);
 
-    parameter ADDRESS_SIZE = 15;
+    localparam ADDRESS_SIZE = 16;
 
     IMemoryBus #(.ADDRESS_SIZE(ADDRESS_SIZE)) memoryBus();
     assign memoryBus.ready = memReady;
