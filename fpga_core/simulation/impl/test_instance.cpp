@@ -95,10 +95,14 @@ TestInstance::GetDataMem32(PhysAddress address)
 void
 TestInstance::WaitInstructions(int n)
 {
+    int prevState = 0;
     do {
         Clock();
-        if (module->dbgState == 0) {
-            n--;
+        if (module->dbgState != prevState) {
+            prevState = module->dbgState;
+            if (prevState == RiscvCore::State::INSN_FETCH) {
+                n--;
+            }
         }
     } while (n);
 }

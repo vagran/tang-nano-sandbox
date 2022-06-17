@@ -1,8 +1,6 @@
 #include <test_runner.h>
 #include <iostream>
 
-//XXX
-#if 0
 
 REGISTER_TEST_FUNC("LUI", ([](TestInstance &ti){
     /*
@@ -14,8 +12,11 @@ REGISTER_TEST_FUNC("LUI", ([](TestInstance &ti){
     });
     ti.Reset();
     ti.WaitInstructions();
-    ASSERT(ti.GetReg(5) == 4 << 12);
+    ASSERT_EQUAL(ti.GetReg(5), 4 << 12);
 }));
+
+//XXX
+#if 0
 
 REGISTER_TEST_FUNC("Word memory transfer", ([](TestInstance &ti){
     /*

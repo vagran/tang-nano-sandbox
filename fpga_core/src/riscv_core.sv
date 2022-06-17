@@ -225,24 +225,60 @@ module RiscvCore
     IInsnDecoder decoded();
     RiscvInsnDecoder insnDecoder(.insn32(insn32[31:2]), .result(decoded));
 
-    /* Three real registers (and also PC), general purpose registers are placed in RAM. Otherwise
-     * not enough resources on FPGA.
-     */
-    reg [31:0] x, y, z;
+    // Two real registers (and also PC), general purpose registers are placed in RAM. Otherwise
+    // not enough resources on FPGA.
+    reg [31:0] x, y;
+    // Controls scheduled shift amount in X and Y registers. Shift is stopped when the counter is
+    // zero allowing both reaching zero and 32.
+    reg [4:0] shiftCounter;
+    wire isShiftZero = shiftCounter == 5'b00000;
+    // Byte boundary reached by the shifter
+    wire isShiftByte = shiftCounter[2:0] == 3'b000;
+    // Triggers shift starting when counter is zero.
+    reg shiftStart;
+    wire isShiftDone = isShiftZero && !shiftStart;
+    // Shift counter is incremented with each shift when true, decremented when false.
+    reg shiftIncrement;
+    reg shiftEnable;//XXX is needed?
+    // MSB of X register is set from ALU when true, set to LSB when false.
+    reg shiftXFromAlu;
+    // Sign extension is enabled when shifting. X[7] is replicated or zeroed depending on
+    // signExtMode.
+    reg enableSignExt;
+    // X[7] is replicated for each shift round when true, zeroed when false.
+    reg signExtMode;
+    // Shift until byte boundary. Set shiftStart to continue when reached.
+    reg shiftByte;
 
     // Memory interface buffers
     reg [memoryBus.ADDRESS_SIZE-1:0] memAddr;
+    wire [memoryBus.ADDRESS_SIZE-1:0] nextMemAddr = memoryBus.ADDRESS_SIZE'(memAddr + 1'b1);
     reg memStrobe;
     reg memWriteEnable;
-    // Write memory from register Z if true, from X otherwise.
-    reg memWriteZ;
 
     assign memoryBus.address = memAddr;
     assign memoryBus.writeEnable = memWriteEnable;
     assign memoryBus.strobe = memStrobe;
-    assign memoryBus.dataWrite = memWriteZ ? z[7:0] : x[7:0];
+    assign memoryBus.dataWrite = x[7:0];
+
+    //XXX no ALU yet
+    wire aluOut;
 
     always @(posedge cpuSignals.clock) begin
+
+        if (shiftEnable &&
+            (shiftStart || (!isShiftZero && !(shiftByte && isShiftByte))) &&
+            !(memStrobe && !memoryBus.ready)) begin
+
+            shiftStart <= 0;
+            shiftCounter <= shiftIncrement ? shiftCounter + 1 : shiftCounter - 1;
+            x[31] <= shiftXFromAlu ? aluOut : x[0];
+            x[30:8] <= x[31:9];
+            x[7] <= enableSignExt ? (signExtMode ? x[7] : 1'b0) : x[8];
+            x[6:0] <= x[7:1];
+            y[31] <= y[0];
+            y[30:0] <= y[31:1];
+        end
 
         if (cpuSignals.reset) begin
             // Do only minimal intialization to save some resources. Software should not assume
@@ -251,8 +287,12 @@ module RiscvCore
             memStrobe <= 0;
             memWriteEnable <= 0;
             state <= S_INSN_FETCH;
-            memWriteZ <= 0;
             isInsn32 <= 0;
+            shiftCounter <= 0;
+            shiftStart <= 0;
+            shiftEnable <= 0;
+            shiftIncrement <= 1;
+            shiftByte <= 0;
 
         end else begin
             case (state)
@@ -283,10 +323,18 @@ module RiscvCore
 
             S_INSN_FETCHED: begin
 
-                // if (wantPcInc) begin
-                //     wantPcInc <= 0;
-                //     pc <= nextPc;
-                // end else begin
+                if (decoded.isLui) begin
+                    x <= decoded.immediate;
+                    memAddr <= `REG_ADDR(decoded.rdIdx);
+                    memStrobe <= 1;
+                    memWriteEnable <= 1;
+                    shiftEnable <= 1;
+                    shiftStart <= 1;
+                    shiftByte <= 1;
+                    // Preload with value 8 to shift 24 bits
+                    shiftCounter[3] <= 1;
+                    state <= S_REG_STORE;
+                end
 
                 //     // First stage of instruction processing
                 //     if (decoded.isLoad || decoded.isStore || decoded.isAluOp) begin
@@ -360,14 +408,23 @@ module RiscvCore
             //     end
             // end
 
-            // S_REG_STORE: begin
-            //     // It is always the last operation
-            //     if (memoryBus.ready) begin
-            //         memStrobe <= 0;
-            //         memWriteEnable <= 0;
-            //         state <= S_INSN_DONE;
-            //     end
-            // end
+            S_REG_STORE: begin
+                // It is always the last operation
+                if (memoryBus.ready) begin
+                    memStrobe <= 0;
+                    if (isShiftDone) begin
+                        shiftEnable <= 0;
+                        memWriteEnable <= 0;
+                        state <= S_INSN_FETCH;
+                    end
+                end else if (!memStrobe && shiftCounter[2:0] == 3'b000) begin
+                    memStrobe <= 1;
+                    memAddr <= nextMemAddr;
+                    if (!isShiftDone) begin
+                        shiftStart <= 1;
+                    end
+                end
+            end
 
             // S_ALU: begin
             //     if (decoded.isAluOp) begin
