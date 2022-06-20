@@ -15,9 +15,6 @@ REGISTER_TEST_FUNC("LUI", ([](TestInstance &ti){
     ASSERT_EQUAL(ti.GetReg(5), 4 << 12);
 }));
 
-//XXX
-#if 0
-
 REGISTER_TEST_FUNC("Word memory transfer", ([](TestInstance &ti){
     /*
     li x5, 0x0040
@@ -215,5 +212,3 @@ REGISTER_TEST_FUNC("Byte memory transfer", ([](TestInstance &ti){
     ti.WaitInstructions();
     ASSERT_EQUAL(ti.GetDataMem32(USER_DATA_START + 20), 0x85cccccc);
 }));
-
-#endif

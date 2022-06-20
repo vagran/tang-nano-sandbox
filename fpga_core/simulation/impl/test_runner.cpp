@@ -7,6 +7,33 @@ namespace {
 std::map<std::string, TestCase::Factory> *tests = nullptr;
 using TestEntry = std::remove_reference_t<decltype(*tests->begin())>;
 
+/** Find option in CLI arguments.
+ * @param optionName Option name to find.
+ * @param hasArg True if option has argument.
+ * @return Option argument if hasArg is true, non-null value otherwise. Default value if option not
+ *  found.
+ */
+const char *
+FindOption(int argc, const char **argv, const std::string &optionName, bool hasArg,
+           const char *defaultValue = nullptr)
+{
+    std::string pattern("--");
+    pattern += optionName;
+    for(; argc; argc--, argv++) {
+        if (pattern == *argv) {
+            if (hasArg) {
+                if (argc < 2) {
+                    throw std::runtime_error("Mission option argument");
+                }
+                return argv[1];
+            } else {
+                return "1";
+            }
+        }
+    }
+    return defaultValue;
+}
+
 } /* anonymous namespace */
 
 void
@@ -28,11 +55,12 @@ RegisterTestCaseFunc(const std::string &name, const TestFunc &tc)
 }
 
 static bool
-RunTest(int argc, char **argv, const TestEntry &te)
+RunTest(int argc, const char **argv, const TestEntry &te)
 {
     const std::string &name = te.first;
     try {
-        TestInstance ti(name);
+        TestInstance ti(name, std::stoi(FindOption(argc, argv, "memReadDelay", true, "0")),
+                        std::stoi(FindOption(argc, argv, "memWriteDelay", true, "0")));
         ti.ctx.traceEverOn(true);
         ti.ctx.commandArgs(argc, argv);
         auto tcPtr = te.second(ti);
@@ -50,7 +78,7 @@ RunTest(int argc, char **argv, const TestEntry &te)
 }
 
 void
-RunTests(int argc, char **argv)
+RunTests(int argc, const char **argv)
 {
     int numFailed = 0;
     for (auto &e: *tests) {
@@ -67,7 +95,7 @@ RunTests(int argc, char **argv)
 }
 
 void
-RunTest(int argc, char **argv, const std::string &testName)
+RunTest(int argc, const char **argv, const std::string &testName)
 {
     std::cout << "Running test `" << testName << "`\n";
     auto it = tests->find(testName);

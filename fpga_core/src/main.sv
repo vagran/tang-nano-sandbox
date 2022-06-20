@@ -42,7 +42,7 @@ always @(posedge btnA) begin
     sink <= {sink[0], sink[7:1]} ^
         memoryBus.dataWrite ^ memoryBus.writeEnable ^ memoryBus.strobe ^ memoryBus.address[15:8] ^
         memoryBus.address[7:0];
-    drain <= {drain[30:0], btnB};
+    drain <= {drain[6:0], btnB};
 end
 
 assign cpuSignals.interruptReq = drain[1:0];

@@ -45,7 +45,7 @@ endinterface
 // Decompresses 16 bits instruction code into full 32 bits code (assume two LSB ix 2'b11)
 module RiscvInsnDecompressor(input wire [15:0] insn16, output reg [31:2] insn32);
 
-always @(insn16) begin
+always_comb begin
 // Implementation is in a generated file
 `include "generated/riscv_insn_decompressor_impl.sv"
 end
@@ -104,7 +104,7 @@ module RiscvInsnDecoder(input [31:2] insn32, IInsnDecoder result);
     assign result.rs2Idx = insn32[23:20];
     assign result.rdIdx = insn32[10:7];
 
-    always @(insn32) begin
+    always_comb begin
         if (insn32[6:2] == 5'b11001 || insn32[6:2] == 5'b00000 || insn32[6:2] == 5'b00100) begin
             // I-type
             result.immediate = {{20{insn32[31]}}, insn32[31:20]};
@@ -165,6 +165,46 @@ endmodule
 // endmodule;
 
 
+module RiscvAlu(input AluOp op, input x, input y, input cIn, output reg cOut, output reg result);
+
+    always_comb begin
+        case (op)
+        OP_ADD: begin
+            {cOut, result} = x + y + cIn;
+        end
+        OP_SUB: begin
+            result = x - y;
+            cOut = 0;//XXX
+        end
+        OP_AND: begin
+            result = x & y;
+            cOut = 0;
+        end
+        OP_OR: begin
+            result = x | y;
+            cOut = 0;
+        end
+        OP_XOR: begin
+            result = x ^ y;
+            cOut = 0;
+        end
+        // Shifts are handled outside of ALU
+        //XXX
+        // OP_SLT:
+        //     result = $signed(x) < $signed(y) ? 32'b1 : 32'b0;
+        // /* Assuming SLTU. */
+        default: begin
+            // result = x < y ? 32'b1 : 32'b0;
+            result = 0;//XXX
+            cOut = 0;
+        end
+
+        endcase
+    end
+
+endmodule
+
+
 // RISC-V core minimal implementation.
 module RiscvCore
     // Program counter value after reset (byte address)
@@ -191,12 +231,9 @@ module RiscvCore
     } State;
 
     // Address from 4-bits register index.
-    `define REG_ADDR(regIdx)  {{memoryBus.ADDRESS_SIZE-6{1'b0}}, regIdx, 2'b00}
-
-    //XXX
-    // 32-bits word address from (unaligned) byte address.
-    // `define TRIM_ADDR(address) address[memoryBus.ADDRESS_SIZE+1:2]
-
+    `define REG_ADDR(regIdx) {{memoryBus.ADDRESS_SIZE-6{1'b0}}, regIdx, 2'b00}
+    // Take bits corresponding to address bus width
+    `define ADDR_BITS(value) value[memoryBus.ADDRESS_SIZE-1:0]
 
     // Program counter
     reg [memoryBus.ADDRESS_SIZE-1:0] pc;
@@ -232,21 +269,21 @@ module RiscvCore
     // zero allowing both reaching zero and 32.
     reg [4:0] shiftCounter;
     wire isShiftZero = shiftCounter == 5'b00000;
-    // Byte boundary reached by the shifter
-    wire isShiftByte = shiftCounter[2:0] == 3'b000;
     // Triggers shift starting when counter is zero.
     reg shiftStart;
     wire isShiftDone = isShiftZero && !shiftStart;
+    // Byte boundary reached by the shifter
+    wire isByteShiftDone = shiftCounter[2:0] == 3'b000;
     // Shift counter is incremented with each shift when true, decremented when false.
     reg shiftIncrement;
-    reg shiftEnable;//XXX is needed?
+    reg shiftEnable;
     // MSB of X register is set from ALU when true, set to LSB when false.
     reg shiftXFromAlu;
     // Sign extension is enabled when shifting. X[7] is replicated or zeroed depending on
     // signExtMode.
     reg enableSignExt;
     // X[7] is replicated for each shift round when true, zeroed when false.
-    reg signExtMode;
+    reg signExtSigned;
     // Shift until byte boundary. Set shiftStart to continue when reached.
     reg shiftByte;
 
@@ -261,24 +298,12 @@ module RiscvCore
     assign memoryBus.strobe = memStrobe;
     assign memoryBus.dataWrite = x[7:0];
 
-    //XXX no ALU yet
-    wire aluOut;
+    wire aluOut, aluCarryOut;
+    reg aluCarry;
+    RiscvAlu alu(.op(decoded.isAluOp ? decoded.aluOp : OP_ADD), .x(x[0]), .y(y[0]),
+                     .cIn(aluCarry), .cOut(aluCarryOut), .result(aluOut));
 
-    always @(posedge cpuSignals.clock) begin
-
-        if (shiftEnable &&
-            (shiftStart || (!isShiftZero && !(shiftByte && isShiftByte))) &&
-            !(memStrobe && !memoryBus.ready)) begin
-
-            shiftStart <= 0;
-            shiftCounter <= shiftIncrement ? shiftCounter + 1 : shiftCounter - 1;
-            x[31] <= shiftXFromAlu ? aluOut : x[0];
-            x[30:8] <= x[31:9];
-            x[7] <= enableSignExt ? (signExtMode ? x[7] : 1'b0) : x[8];
-            x[6:0] <= x[7:1];
-            y[31] <= y[0];
-            y[30:0] <= y[31:1];
-        end
+    always_ff @(posedge cpuSignals.clock) begin
 
         if (cpuSignals.reset) begin
             // Do only minimal intialization to save some resources. Software should not assume
@@ -293,8 +318,39 @@ module RiscvCore
             shiftEnable <= 0;
             shiftIncrement <= 1;
             shiftByte <= 0;
+            shiftXFromAlu <= 0;
+            aluCarry <= 0;
+            enableSignExt <= 0;
 
         end else begin
+
+            aluCarry <= isShiftDone ? 0 : aluCarryOut;
+
+            if (shiftEnable) begin
+                if (!memWriteEnable && memoryBus.ready && isByteShiftDone &&
+                    (isShiftZero || !shiftStart)) begin
+
+                    memStrobe <= 0;
+                    x[7:0] <= memoryBus.dataRead;
+
+                end else if (shiftStart || !(isShiftZero || (shiftByte && isByteShiftDone)) &&
+                    (!memStrobe ||
+                     // Do not shift if memory write is in progress
+                     (memWriteEnable && memoryBus.ready) ||
+                     // Do not shift if memory read is in progress for the first byte
+                     (!memWriteEnable && (!isShiftZero || memoryBus.ready)))) begin
+
+                    shiftStart <= 0;
+                    shiftCounter <= shiftIncrement ? shiftCounter + 5'd1 : shiftCounter - 5'd1;
+                    x[31] <= shiftXFromAlu ? aluOut : x[0];
+                    x[30:8] <= x[31:9];
+                    x[7] <= enableSignExt ? (signExtSigned ? x[7] : 1'b0) : x[8];
+                    x[6:0] <= x[7:1];
+                    y[31] <= y[0];
+                    y[30:0] <= y[31:1];
+                end
+            end
+
             case (state)
 
             S_INSN_FETCH: begin
@@ -324,6 +380,7 @@ module RiscvCore
             S_INSN_FETCHED: begin
 
                 if (decoded.isLui) begin
+                    //XXX to Y, then through ALU, takeY op
                     x <= decoded.immediate;
                     memAddr <= `REG_ADDR(decoded.rdIdx);
                     memStrobe <= 1;
@@ -334,28 +391,100 @@ module RiscvCore
                     // Preload with value 8 to shift 24 bits
                     shiftCounter[3] <= 1;
                     state <= S_REG_STORE;
+
+                end else if (decoded.isLoad || decoded.isStore) begin
+                    //XXX check resources consumption for blocking assignment to x and move to y
+                    y <= decoded.immediate;
+                    memAddr <= `REG_ADDR(decoded.rs1Idx);
+                    memStrobe <= 1;
+                    shiftXFromAlu <= 1;
+                    signExtSigned <= decoded.isLoadSigned;
+                    shiftEnable <= 1;
+                    shiftByte <= 1;
+                    shiftStart <= 1;
+                    state <= S_REG_FETCH;
+
+                end else if (decoded.isAluOp) begin
+                    if (decoded.isAluImmediate) begin
+                        y <= decoded.immediate;
+                        shiftXFromAlu <= 1;
+                        memAddr <= `REG_ADDR(decoded.rs1Idx);
+                    end else begin
+                        memAddr <= `REG_ADDR(decoded.rs2Idx);
+                        //XXX shiftYFromX <= 1;
+                    end
+                    memStrobe <= 1;
+                    shiftEnable <= 1;
+                    shiftByte <= 1;
+                    shiftStart <= 1;
+                    state <= S_REG_FETCH;
                 end
-
-                //     // First stage of instruction processing
-                //     if (decoded.isLoad || decoded.isStore || decoded.isAluOp) begin
-                //         // Fetch source address
-                //         memAddr <= `REG_ADDR(decoded.rs1Idx);
-                //         memStrobe <= 1;
-                //         state <= S_REG_FETCH;
-
-                //     end else if (decoded.isLui) begin
-                //         memData <= decoded.immediate;
-                //         memAddr <= `REG_ADDR(decoded.rdIdx);
-                //         memWriteEnable <= 1;
-                //         memStrobe <= 1;
-                //         state <= S_REG_STORE;
-                //     end
-
-                // end
-                //XXX
             end
 
-            // S_REG_FETCH: begin
+            S_REG_FETCH: begin
+
+                if (!memStrobe && isByteShiftDone && !isShiftDone) begin
+                    // Next byte received
+                    if (!(shiftCounter[4] && shiftCounter[3])) begin
+                        // If not 24 bits shifted (otherwise last byte is already read)
+                        memStrobe <= 1;
+                        memAddr <= nextMemAddr;
+                    end
+                    if (!isShiftZero) begin
+                        shiftStart <= 1;
+                    end
+                    enableSignExt <= decoded.isLoad && !shiftXFromAlu &&
+                        (decoded.transferByte ||
+                        (decoded.transferHalfWord && (shiftCounter[4] || shiftCounter[3])));
+
+                end else if (isShiftDone && !memStrobe) begin
+                    // All bytes received and shifted
+                    //XXX
+                    if (decoded.isLoad) begin
+
+                        if (shiftXFromAlu) begin
+                            // It was value rs1 fetching and address calculation, begin value
+                            // fetching
+                            shiftXFromAlu <= 0;
+                            memAddr <= `ADDR_BITS(x);
+                            memStrobe <= 1;
+                            shiftStart <= 1;
+                            enableSignExt <= 0;
+
+                        end else begin
+                            memAddr <= `REG_ADDR(decoded.rdIdx);
+                            memStrobe <= 1;
+                            memWriteEnable <= 1;
+                            // Preload with value 8 to shift 24 bits
+                            shiftCounter[3] <= 1;
+                            shiftStart <= 1;
+                            state <= S_REG_STORE;
+
+                            // Start shifting after byte read
+                        end
+
+                    end else if (decoded.isAluOp) begin
+                        if (shiftXFromAlu) begin
+                            // ALU operation complete, store result
+                            shiftXFromAlu <= 0;
+                            memAddr <= `REG_ADDR(decoded.rdIdx);
+                            memStrobe <= 1;
+                            memWriteEnable <= 1;
+                            // Preload with value 8 to shift 24 bits
+                            shiftCounter[3] <= 1;
+                            state <= S_REG_STORE;
+                        end else begin
+                            // Second operand fetched, fetch the first one simultaneously
+                            // calculating result.
+                            y <= x;//XXX use shift from x to y
+                            memAddr <= `REG_ADDR(decoded.rs1Idx);
+                            shiftXFromAlu <= 1;
+                        end
+                        shiftStart <= 1;
+                    end
+                end
+            end
+
             //     if (memoryBus.ready) begin
             //         memStrobe <= 0;
             //         fetchRs2 <= 0;
@@ -415,9 +544,11 @@ module RiscvCore
                     if (isShiftDone) begin
                         shiftEnable <= 0;
                         memWriteEnable <= 0;
+                        shiftByte <= 0;
+                        isInsn32 <= 0;
                         state <= S_INSN_FETCH;
                     end
-                end else if (!memStrobe && shiftCounter[2:0] == 3'b000) begin
+                end else if (!memStrobe && isByteShiftDone) begin
                     memStrobe <= 1;
                     memAddr <= nextMemAddr;
                     if (!isShiftDone) begin

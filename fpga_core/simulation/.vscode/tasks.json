@@ -4,9 +4,24 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Simulate",
+            "label": "Simulate (no delay)",
             "type": "shell",
             "command": "${workspaceFolder}/build/simulation"
+        },
+        {
+            "label": "Simulate (memory delay)",
+            "type": "shell",
+            "command": "${workspaceFolder}/build/simulation --memReadDelay 8 --memWriteDelay 8"
+        },
+        {
+            "label": "Simulate (memory long delay)",
+            "type": "shell",
+            "command": "${workspaceFolder}/build/simulation --memReadDelay 20 --memWriteDelay 20"
+        },
+        {
+            "label": "Simulate",
+            "type": "shell",
+            "command": "${workspaceFolder}/build/simulation && ${workspaceFolder}/build/simulation --memReadDelay 8 --memWriteDelay 8 && ${workspaceFolder}/build/simulation --memReadDelay 20 --memWriteDelay 20"
         }
     ]
 }

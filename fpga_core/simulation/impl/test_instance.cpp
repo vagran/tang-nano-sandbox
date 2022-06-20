@@ -25,8 +25,21 @@ void
 TestInstance::HandleMemory()
 {
     if (!module->memStrobe) {
+        if (memDelay) {
+            TEST_FAIL("memStrobe de-asserted before ready");
+        }
         module->memReady = 0;
+        memStrobeLow = true;
         return;
+    }
+    if (!memStrobeLow) {
+        return;
+    }
+    if (memDelay < (module->memWriteEnable ? memWriteDelay : memReadDelay)) {
+        memDelay++;
+        return;
+    } else {
+        memDelay = 0;
     }
     PhysAddress address = module->memAddress;
     if (IsProgAddress(address)) {
@@ -52,7 +65,9 @@ TestInstance::HandleMemory()
                                            << address << "h");
     }
     module->memReady = 1;
+    memStrobeLow = false;
 }
+
 
 void
 TestInstance::Fail(const char *file, int line, const char *msg)

@@ -109,9 +109,9 @@ struct TestCaseFuncRegisterHelper {
 
 
 void
-RunTests(int argc, char **argv);
+RunTests(int argc, const char **argv);
 
 void
-RunTest(int argc, char **argv, const std::string &testName);
+RunTest(int argc, const char **argv, const std::string &testName);
 
 #endif /* INCLUDE_TEST_RUNNER_H */

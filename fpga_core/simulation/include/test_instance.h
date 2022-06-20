@@ -14,12 +14,15 @@ public:
 
 class TestInstance {
 public:
+    const int memReadDelay, memWriteDelay;
     VerilatedContext ctx;
     const std::string name;
     std::unique_ptr<Vriscv_core_test> module;
     std::vector<uint8_t> progMem, dataMem;
 
-    TestInstance(const std::string &name):
+    TestInstance(const std::string &name, int memReadDelay = 0, int memWriteDelay = 0):
+        memReadDelay(memReadDelay),
+        memWriteDelay(memWriteDelay),
         ctx(),
         name(name),
         module(std::make_unique<Vriscv_core_test>(&ctx)),
@@ -86,6 +89,8 @@ public:
 
 protected:
     int clock = 0;
+    bool memStrobeLow = false;
+    int memDelay = 0;
 
     void
     HandleMemory();

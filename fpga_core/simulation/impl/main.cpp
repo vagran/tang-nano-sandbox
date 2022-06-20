@@ -6,13 +6,14 @@
 
 
 int
-main(int argc, char **argv, char **)
+main(int argc, const char **argv, char **)
 {
     std::cout << "\n================= Simulation =================\n";
 
     // RunTests(argc, argv);
     //XXX
     RunTest(argc, argv, "LUI");
+    // RunTest(argc, argv, "Word memory transfer");
 
     return 0;
 }
