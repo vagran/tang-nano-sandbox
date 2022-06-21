@@ -35,7 +35,21 @@ TestInstance::HandleMemory()
     if (!memStrobeLow) {
         return;
     }
+    if (memDelay) {
+        if (module->memWriteEnable && memDataLatched != module->memDataWrite) {
+            throw std::runtime_error("Memory write data changed during strobe");
+        }
+        if (memAddressLatched != module->memAddress) {
+            throw std::runtime_error("Memory address changed during strobe");
+        }
+    }
     if (memDelay < (module->memWriteEnable ? memWriteDelay : memReadDelay)) {
+        if (memDelay == 0) {
+            if (module->memWriteEnable) {
+                memDataLatched = module->memDataWrite;
+            }
+            memAddressLatched = module->memAddress;
+        }
         memDelay++;
         return;
     } else {

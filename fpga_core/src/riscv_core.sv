@@ -333,7 +333,7 @@ module RiscvCore
                     memStrobe <= 0;
                     x[7:0] <= memoryBus.dataRead;
 
-                end else if (shiftStart || !(isShiftZero || (shiftByte && isByteShiftDone)) &&
+                end else if ((shiftStart || !(isShiftZero || (shiftByte && isByteShiftDone))) &&
                     (!memStrobe ||
                      // Do not shift if memory write is in progress
                      (memWriteEnable && memoryBus.ready) ||
