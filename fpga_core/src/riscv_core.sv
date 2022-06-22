@@ -279,6 +279,8 @@ module RiscvCore
     reg shiftEnable;
     // MSB of X register is set from ALU when true, set to LSB when false.
     reg shiftXFromAlu;
+    // MSB of Y register is set from ALU when true, set to LSB when false.
+    reg shiftYFromAlu;
     // Sign extension is enabled when shifting. X[7] is replicated or zeroed depending on
     // signExtMode.
     reg enableSignExt;
@@ -319,6 +321,7 @@ module RiscvCore
             shiftIncrement <= 1;
             shiftByte <= 0;
             shiftXFromAlu <= 0;
+            shiftYFromAlu <= 0;
             aluCarry <= 0;
             enableSignExt <= 0;
 
@@ -344,8 +347,10 @@ module RiscvCore
                     x[30:8] <= x[31:9];
                     x[7] <= enableSignExt ? (signExtSigned ? x[7] : 1'b0) : x[8];
                     x[6:0] <= x[7:1];
-                    y[31] <= y[0];
+
+                    y[31] <= shiftYFromAlu ? aluOut : y[0];
                     y[30:0] <= y[31:1];
+
                     aluCarry <= shiftXFromAlu ? aluCarryOut : 0;
 
                 end
@@ -398,6 +403,7 @@ module RiscvCore
                     memAddr <= `REG_ADDR(decoded.rs1Idx);
                     memStrobe <= 1;
                     shiftXFromAlu <= 1;
+                    shiftYFromAlu <= decoded.isStore;
                     signExtSigned <= decoded.isLoadSigned;
                     shiftEnable <= 1;
                     shiftByte <= 1;
@@ -451,8 +457,9 @@ module RiscvCore
                             // fetching
                             shiftXFromAlu <= 0;
                             // Preset for byte loading
-                            //XXX check with if
-                            enableSignExt <= decoded.isLoad && decoded.transferByte;
+                            if (decoded.isLoad && decoded.transferByte) begin
+                                enableSignExt <= 1;
+                            end
                             memAddr <= `ADDR_BITS(x);
                             memStrobe <= 1;
                             shiftStart <= 1;
@@ -474,8 +481,8 @@ module RiscvCore
                         if (shiftXFromAlu) begin
                             // It was value rs1 fetching and address calculation, begin value
                             // fetching
-                            y <= x;//XXX shift y from ALU
                             shiftXFromAlu <= 0;
+                            shiftYFromAlu <= 0;
                             memAddr <= `REG_ADDR(decoded.rs2Idx);
                             memStrobe <= 1;
                             shiftStart <= 1;
