@@ -281,6 +281,8 @@ module RiscvCore
     reg shiftXFromAlu;
     // MSB of Y register is set from ALU when true, set to LSB when false.
     reg shiftYFromAlu;
+    // MSB of Y register is set from X LSB when true, set to Y LSB when false.
+    reg shiftYFromX;
     // Sign extension is enabled when shifting. X[7] is replicated or zeroed depending on
     // signExtMode.
     reg enableSignExt;
@@ -322,6 +324,7 @@ module RiscvCore
             shiftByte <= 0;
             shiftXFromAlu <= 0;
             shiftYFromAlu <= 0;
+            shiftYFromX <= 0;
             aluCarry <= 0;
             enableSignExt <= 0;
 
@@ -348,7 +351,7 @@ module RiscvCore
                     x[7] <= enableSignExt ? (signExtSigned ? x[7] : 1'b0) : x[8];
                     x[6:0] <= x[7:1];
 
-                    y[31] <= shiftYFromAlu ? aluOut : y[0];
+                    y[31] <= shiftYFromAlu ? aluOut : (shiftYFromX ? x[0] : y[0]);
                     y[30:0] <= y[31:1];
 
                     aluCarry <= shiftXFromAlu ? aluCarryOut : 0;
@@ -417,7 +420,7 @@ module RiscvCore
                         memAddr <= `REG_ADDR(decoded.rs1Idx);
                     end else begin
                         memAddr <= `REG_ADDR(decoded.rs2Idx);
-                        //XXX shiftYFromX <= 1;
+                        shiftYFromX <= 1;
                     end
                     memStrobe <= 1;
                     shiftEnable <= 1;
@@ -518,7 +521,7 @@ module RiscvCore
                         end else begin
                             // Second operand fetched, fetch the first one simultaneously
                             // calculating result.
-                            y <= x;//XXX use shift from x to y
+                            shiftYFromX <= 0;
                             memAddr <= `REG_ADDR(decoded.rs1Idx);
                             shiftXFromAlu <= 1;
                         end
