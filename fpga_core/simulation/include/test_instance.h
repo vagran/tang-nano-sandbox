@@ -89,6 +89,7 @@ public:
 
 protected:
     int clock = 0;
+    
     bool memStrobeLow = false;
     uint8_t memDataLatched = 0;
     PhysAddress memAddressLatched = 0;

@@ -324,8 +324,6 @@ module RiscvCore
 
         end else begin
 
-            aluCarry <= isShiftDone ? 0 : aluCarryOut;
-
             if (shiftEnable) begin
                 if (!memWriteEnable && memoryBus.ready && isByteShiftDone &&
                     (isShiftZero || !shiftStart)) begin
@@ -348,6 +346,8 @@ module RiscvCore
                     x[6:0] <= x[7:1];
                     y[31] <= y[0];
                     y[30:0] <= y[31:1];
+                    aluCarry <= shiftXFromAlu ? aluCarryOut : 0;
+
                 end
             end
 
@@ -425,20 +425,24 @@ module RiscvCore
 
                 if (!memStrobe && isByteShiftDone && !isShiftDone) begin
                     // Next byte received
-                    if (!(shiftCounter[4] && shiftCounter[3])) begin
+                    if (!isShiftZero) begin
+                        shiftStart <= 1;
+                    end
+                    if (decoded.isLoad && !shiftXFromAlu &&
+                        (decoded.transferByte ||
+                        (decoded.transferHalfWord && (shiftCounter[4] || shiftCounter[3])))) begin
+
+                        // Set before 24 bits shifted, unset on last byte shifting
+                        enableSignExt <= shiftCounter[4:3] != 2'b11;
+                    end else if (!(shiftCounter[4] && shiftCounter[3])) begin
                         // If not 24 bits shifted (otherwise last byte is already read)
                         memStrobe <= 1;
                         memAddr <= nextMemAddr;
                     end
-                    if (!isShiftZero) begin
-                        shiftStart <= 1;
-                    end
-                    enableSignExt <= decoded.isLoad && !shiftXFromAlu &&
-                        (decoded.transferByte ||
-                        (decoded.transferHalfWord && (shiftCounter[4] || shiftCounter[3])));
 
                 end else if (isShiftDone && !memStrobe) begin
                     // All bytes received and shifted
+                    aluCarry <= 0;
                     //XXX
                     if (decoded.isLoad) begin
 
@@ -446,10 +450,12 @@ module RiscvCore
                             // It was value rs1 fetching and address calculation, begin value
                             // fetching
                             shiftXFromAlu <= 0;
+                            // Preset for byte loading
+                            //XXX check with if
+                            enableSignExt <= decoded.isLoad && decoded.transferByte;
                             memAddr <= `ADDR_BITS(x);
                             memStrobe <= 1;
                             shiftStart <= 1;
-                            enableSignExt <= 0;
 
                         end else begin
                             memAddr <= `REG_ADDR(decoded.rdIdx);
@@ -461,6 +467,35 @@ module RiscvCore
                             state <= S_REG_STORE;
 
                             // Start shifting after byte read
+                        end
+
+                    end else if (decoded.isStore) begin
+
+                        if (shiftXFromAlu) begin
+                            // It was value rs1 fetching and address calculation, begin value
+                            // fetching
+                            y <= x;//XXX shift y from ALU
+                            shiftXFromAlu <= 0;
+                            memAddr <= `REG_ADDR(decoded.rs2Idx);
+                            memStrobe <= 1;
+                            shiftStart <= 1;
+
+                        end else begin
+                            memAddr <= `ADDR_BITS(y);
+                            memStrobe <= 1;
+                            memWriteEnable <= 1;
+                            if (decoded.transferWord) begin
+                                // Preload with value 8 to shift 24 bits
+                                shiftCounter[3] <= 1;
+                                shiftStart <= 1;
+                            end else if (decoded.transferHalfWord) begin
+                                // Preload with value 24 to shift 8 bits
+                                shiftCounter[4] <= 1;
+                                shiftCounter[3] <= 1;
+                                shiftStart <= 1;
+                            end
+                            // Shifting is not started if transferring 8 bits
+                            state <= S_REG_STORE;
                         end
 
                     end else if (decoded.isAluOp) begin
