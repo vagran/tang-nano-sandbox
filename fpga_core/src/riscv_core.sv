@@ -173,7 +173,7 @@ module RiscvAlu(input AluOp op, input x, input y, input cIn, output reg cOut, ou
             {cOut, result} = x + y + cIn;
         end
         OP_SUB: begin
-            {result, cOut} = {x, 1'b0} - {y, cIn};
+            {cOut, result} = 2'(x) - 2'(y) - 2'(cIn);
         end
         OP_AND: begin
             result = x & y;
