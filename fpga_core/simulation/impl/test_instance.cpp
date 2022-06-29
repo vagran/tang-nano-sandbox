@@ -115,6 +115,12 @@ TestInstance::GetReg(int idx) const
     return ReadWord32(dataMem.data() + idx * sizeof(uint32_t));
 }
 
+void
+TestInstance::SetReg(int idx, uint32_t value)
+{
+    WriteWord32(dataMem.data() + idx * sizeof(uint32_t), value);
+}
+
 uint32_t
 TestInstance::GetDataMem32(PhysAddress address)
 {

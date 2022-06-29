@@ -12,8 +12,8 @@ main(int argc, const char **argv, char **)
 
     // RunTests(argc, argv);
     //XXX
-    RunTest(argc, argv, "LUI");
-    // RunTest(argc, argv, "Word memory transfer");
+    // RunTest(argc, argv, "LUI");
+    RunTest(argc, argv, "ADD 0x42, 0x53");
 
     return 0;
 }

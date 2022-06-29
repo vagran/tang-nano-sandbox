@@ -74,6 +74,9 @@ public:
     uint32_t
     GetReg(int idx) const;
 
+    void
+    SetReg(int idx, uint32_t value);
+
     uint32_t
     GetDataMem32(PhysAddress address);
 
@@ -89,7 +92,7 @@ public:
 
 protected:
     int clock = 0;
-    
+
     bool memStrobeLow = false;
     uint8_t memDataLatched = 0;
     PhysAddress memAddressLatched = 0;

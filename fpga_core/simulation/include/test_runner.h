@@ -101,8 +101,7 @@ struct TestCaseFuncRegisterHelper {
     static TestCaseRegisterHelper T_CONCAT(__tcr_, __COUNTER__)(__name, __tc)
 
 #define REGISTER_TEST_CLASS(__name, __cls) \
-    static TestCaseRegisterHelper T_CONCAT(__tcr_, __COUNTER__) \
-        (__name, [](TestInstance &ti){ return std::make_shared<__cls>(ti); })
+    REGISTER_TEST(__name, [](TestInstance &ti){ return std::make_shared<__cls>(ti); })
 
 #define REGISTER_TEST_FUNC(__name, __tc) \
     static TestCaseFuncRegisterHelper T_CONCAT(__tcr_, __COUNTER__)(__name, __tc)
