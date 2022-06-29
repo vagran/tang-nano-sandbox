@@ -110,3 +110,7 @@ AluTestCase::ExpectedResult(AluTestCase::Op op, uint32_t arg1, uint32_t arg2)
                                                                __arg1, __arg2); });
 
 ALU_TEST(ADD, 0x42, 0x53)
+ALU_TEST(ADD, 0x0, 0x53)
+ALU_TEST(ADD, 0x42, 0x0)
+ALU_TEST(ADD, 0xffffffcc, 0x53)
+ALU_TEST(ADD, 0xffffffcc, 0xffff4243)

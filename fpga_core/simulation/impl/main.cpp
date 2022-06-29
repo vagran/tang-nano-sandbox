@@ -10,10 +10,10 @@ main(int argc, const char **argv, char **)
 {
     std::cout << "\n================= Simulation =================\n";
 
-    // RunTests(argc, argv);
+    RunTests(argc, argv);
     //XXX
     // RunTest(argc, argv, "LUI");
-    RunTest(argc, argv, "ADD 0x42, 0x53");
+    // RunTest(argc, argv, "ADD 0x42, 0x53");
 
     return 0;
 }
