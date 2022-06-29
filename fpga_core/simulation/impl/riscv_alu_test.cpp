@@ -86,7 +86,7 @@ AluTestCase::ExpectedResult(AluTestCase::Op op, uint32_t arg1, uint32_t arg2)
     case Op::SLL:
         return arg1 << arg2;
     case Op::SLT:
-        return static_cast<int32_t>(arg1) < static_cast<int32_t>(arg2) ? 1 : 0;
+        return (static_cast<int32_t>(arg1) < static_cast<int32_t>(arg2)) ? 1 : 0;
     case Op::SLTU:
         return arg1 < arg2 ? 1 : 0;
     case Op::XOR:
@@ -105,7 +105,7 @@ AluTestCase::ExpectedResult(AluTestCase::Op op, uint32_t arg1, uint32_t arg2)
 
 
 #define ALU_TEST(__op, __arg1, __arg2) \
-    REGISTER_TEST(# __op " " # __arg1 ", " # __arg2, \
+    REGISTER_TEST("ALU " # __op " " # __arg1 ", " # __arg2, \
     [](TestInstance &ti){ return std::make_shared<AluTestCase>(ti, AluTestCase::Op::__op, \
                                                                __arg1, __arg2); });
 
@@ -123,3 +123,45 @@ ALU_TEST(SUB, 0x0, 0x53)
 ALU_TEST(SUB, 0x42, 0x0)
 ALU_TEST(SUB, 0xffffffcc, 0x53)
 ALU_TEST(SUB, 0xffffffcc, 0xffff4243)
+
+ALU_TEST(SLT, 0x42, 0x53)
+ALU_TEST(SLT, 0x53, 0x42)
+ALU_TEST(SLT, 0x53, 0x53)
+ALU_TEST(SLT, 0xffffff42, 0xffffff53)
+ALU_TEST(SLT, 0xffffff53, 0xffffff42)
+ALU_TEST(SLT, 0xffffff53, 0xffffff53)
+ALU_TEST(SLT, 0xffffff53, 0x53)
+ALU_TEST(SLT, 0x53, 0xffffff53)
+
+ALU_TEST(SLTU, 0x42, 0x53)
+ALU_TEST(SLTU, 0x53, 0x42)
+ALU_TEST(SLTU, 0x53, 0x53)
+ALU_TEST(SLTU, 0xffffff42, 0xffffff53)
+ALU_TEST(SLTU, 0xffffff53, 0xffffff42)
+ALU_TEST(SLTU, 0xffffff53, 0xffffff53)
+ALU_TEST(SLTU, 0xffffff53, 0x53)
+ALU_TEST(SLTU, 0x53, 0xffffff53)
+
+ALU_TEST(XOR, 0x42, 0x53)
+ALU_TEST(XOR, 0x53, 0x42)
+ALU_TEST(XOR, 0x53, 0x53)
+ALU_TEST(XOR, 0x0, 0x42)
+ALU_TEST(XOR, 0xffffffff, 0x42)
+ALU_TEST(XOR, 0x0, 0x0)
+ALU_TEST(XOR, 0xffffffff, 0xffffffff)
+
+ALU_TEST(OR, 0x42, 0x53)
+ALU_TEST(OR, 0x53, 0x42)
+ALU_TEST(OR, 0x53, 0x53)
+ALU_TEST(OR, 0x0, 0x42)
+ALU_TEST(OR, 0xffffffff, 0x42)
+ALU_TEST(OR, 0x0, 0x0)
+ALU_TEST(OR, 0xffffffff, 0xffffffff)
+
+ALU_TEST(AND, 0x42, 0x53)
+ALU_TEST(AND, 0x53, 0x42)
+ALU_TEST(AND, 0x53, 0x53)
+ALU_TEST(AND, 0x0, 0x42)
+ALU_TEST(AND, 0xffffffff, 0x42)
+ALU_TEST(AND, 0x0, 0x0)
+ALU_TEST(AND, 0xffffffff, 0xffffffff)

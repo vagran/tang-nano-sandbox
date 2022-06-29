@@ -86,6 +86,7 @@ interface IInsnDecoder;
     wire AluOp aluOp;
     // True operation with rs1 and immediate value, false if operation on rs1 and rs2.
     wire isAluImmediate;
+    wire isSlt, isSltu;
 
 endinterface
 
@@ -128,42 +129,12 @@ module RiscvInsnDecoder(input [31:2] insn32, IInsnDecoder result);
     // part of immediate value in such case. SRAI is exception,
     assign result.aluOp =
         AluOp'({(insn32[5] || insn32[14:12] == 3'b101) && insn32[30], insn32[14:12]});
+    assign result.isSlt = result.aluOp == OP_SLT;
+    assign result.isSltu = result.aluOp == OP_SLTU;
 
 endmodule
 
 `define IS_INSN32(opcode)  (2'(opcode) == 2'b11)
-
-// module RiscvAlu(input AluOp op, [31:0] x, [31:0] y, output reg [31:0] result);
-
-//     always @(*) begin
-//         case (op)
-//         OP_ADD:
-//             result = x + y;
-//         OP_SUB:
-//             result = x - y;
-//         OP_AND:
-//             result = x & y;
-//         OP_OR:
-//             result = x | y;
-//         OP_XOR:
-//             result = x ^ y;
-//         OP_SLL:
-//             result = x << y[4:0];
-//         OP_SRL:
-//             result = x >> y[4:0];
-//         OP_SRA:
-//             result = x >>> y[4:0];
-//         OP_SLT:
-//             result = $signed(x) < $signed(y) ? 32'b1 : 32'b0;
-//         /* Assuming SLTU. */
-//         default:
-//             result = x < y ? 32'b1 : 32'b0;
-
-//         endcase
-//     end
-
-// endmodule;
-
 
 module RiscvAlu(input AluOp op, input x, input y, input cIn, output reg cOut, output reg result);
 
@@ -188,14 +159,11 @@ module RiscvAlu(input AluOp op, input x, input y, input cIn, output reg cOut, ou
             cOut = 0;
         end
         // Shifts are handled outside of ALU
-        //XXX
-        // OP_SLT:
-        //     result = $signed(x) < $signed(y) ? 32'b1 : 32'b0;
-        // /* Assuming SLTU. */
+        // Assuming SLT or SLTU.
         default: begin
-            // result = x < y ? 32'b1 : 32'b0;
-            result = 0;//XXX
-            cOut = 0;
+            // Same as for substraction but result is discarded, only carry is needed
+            result = 0;
+            cOut = (!x && (y || cIn)) || (y && cIn);
         end
 
         endcase
@@ -275,6 +243,8 @@ module RiscvCore
     wire isByteShiftDone = shiftCounter[2:0] == 3'b000;
     // Shift counter is incremented with each shift when true, decremented when false.
     reg shiftIncrement;
+    wire [4:0] nextShiftCounter = shiftIncrement ? shiftCounter + 5'd1 : shiftCounter - 5'd1;
+    wire isNextShiftZero = nextShiftCounter == 5'b00000;
     reg shiftEnable;
     // MSB of X register is set from ALU when true, set to LSB when false.
     reg shiftXFromAlu;
@@ -289,6 +259,8 @@ module RiscvCore
     reg signExtSigned;
     // Shift until byte boundary. Set shiftStart to continue when reached.
     reg shiftByte;
+    // Stores sign bit of X and Y registers when shifting last bit.
+    reg xSign, ySign;
 
     // Memory interface buffers
     reg [memoryBus.ADDRESS_SIZE-1:0] memAddr;
@@ -344,7 +316,8 @@ module RiscvCore
                      (!memWriteEnable && (!isShiftZero || memoryBus.ready)))) begin
 
                     shiftStart <= 0;
-                    shiftCounter <= shiftIncrement ? shiftCounter + 5'd1 : shiftCounter - 5'd1;
+                    shiftCounter <= nextShiftCounter;
+
                     x[31] <= shiftXFromAlu ? aluOut : x[0];
                     x[30:8] <= x[31:9];
                     x[7] <= enableSignExt ? (signExtSigned ? x[7] : 1'b0) : x[8];
@@ -352,6 +325,11 @@ module RiscvCore
 
                     y[31] <= shiftYFromAlu ? aluOut : (shiftYFromX ? x[0] : y[0]);
                     y[30:0] <= y[31:1];
+
+                    if (isNextShiftZero) begin
+                        xSign <= x[0];
+                        ySign <= y[0];
+                    end
 
                     aluCarry <= shiftXFromAlu ? aluCarryOut : 0;
 
@@ -510,6 +488,11 @@ module RiscvCore
                     end else if (decoded.isAluOp) begin
                         if (shiftXFromAlu) begin
                             // ALU operation complete, store result
+                            if (decoded.isSltu) begin
+                                x[0] <= aluCarry;
+                            end else if (decoded.isSlt) begin
+                                x[0] <= (xSign ^ ySign) ? xSign : aluCarry;
+                            end
                             shiftXFromAlu <= 0;
                             memAddr <= `REG_ADDR(decoded.rdIdx);
                             memWriteEnable <= 1;
