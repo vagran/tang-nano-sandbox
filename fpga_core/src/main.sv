@@ -40,7 +40,9 @@ reg [7:0] drain;
 always @(posedge btnA) begin
     debugHw.bits = sink[7:0];
     sink <= {sink[0], sink[7:1]} ^
-        memoryBus.dataWrite ^ memoryBus.writeEnable ^ memoryBus.strobe ^ memoryBus.address[15:8] ^
+        memoryBus.dataWrite ^
+        {memoryBus.writeEnable, memoryBus.strobe, 6'b00000} ^
+        memoryBus.address[15:8] ^
         memoryBus.address[7:0];
     drain <= {drain[6:0], btnB};
 end
