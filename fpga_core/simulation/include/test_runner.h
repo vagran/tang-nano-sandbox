@@ -3,6 +3,7 @@
 
 #include <test_instance.h>
 #include <sstream>
+#include <functional>
 
 class TestException: public std::runtime_error {
 public:
